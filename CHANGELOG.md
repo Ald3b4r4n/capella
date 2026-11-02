@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.2 (unreleased)
+## 0.1.2 (2026-11-02)
 
 The rest of what Antares learned in 0.1.4–0.2.1 and fits opencode:
 
