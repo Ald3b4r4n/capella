@@ -16,6 +16,8 @@
   --mono: var(--vscode-editor-font-family, Consolas, "Cascadia Mono", monospace);
   --sans: var(--vscode-font-family, system-ui, sans-serif);
   --r: 10px;
+  --edge: color-mix(in srgb, var(--fg) 34%, var(--bg));
+  --surface: color-mix(in srgb, var(--fg) 8%, var(--bg));
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -99,18 +101,20 @@ details.think .body { white-space: pre-wrap; margin-top: 4px; padding-left: 14px
 .notice { margin: 0 16px 8px; padding: 6px 10px; border-radius: 8px; background: var(--raised); border: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .notice.error { color: var(--error); border-color: color-mix(in srgb, var(--error) 50%, var(--line)); }
 
-.composer { padding: 0 14px 14px; }
-.composer .box { background: var(--input-bg); border: 1px solid var(--line); border-radius: 14px; padding: 8px 10px 6px; }
-.composer .box:focus-within { border-color: var(--gold); }
+.composer { padding: 10px 14px 14px; border-top: 1px solid var(--line); }
+.composer .box { background: var(--surface); border: 1px solid var(--edge); border-radius: 14px; padding: 8px 10px 6px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28); transition: border-color 0.12s, box-shadow 0.12s; }
+.composer .box:focus-within { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-soft), 0 2px 10px rgba(0, 0, 0, 0.28); }
 textarea { width: 100%; resize: none; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; max-height: 220px; }
+.composer textarea:focus, .composer textarea:focus-visible { outline: none; }
+textarea::placeholder { color: color-mix(in srgb, var(--fg) 58%, var(--bg)); opacity: 1; }
 .row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .spacer { flex: 1; }
-.chip { background: none; border: 1px solid var(--line); border-radius: 999px; padding: 1px 10px; font-size: 12px; color: var(--muted); max-width: 48%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chip:hover { color: var(--fg); }
-.chip[data-tone="plan"] { color: var(--teal); border-color: color-mix(in srgb, var(--teal) 50%, var(--line)); }
-.chip[data-tone="edit"] { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 50%, var(--line)); }
-.chip[data-tone="danger"] { color: var(--error); border-color: color-mix(in srgb, var(--error) 55%, var(--line)); }
-.chip.plus { padding: 0 9px; font-size: 15px; line-height: 1.35; color: var(--gold); border-color: color-mix(in srgb, var(--gold) 45%, var(--line)); }
+.chip { background: color-mix(in srgb, var(--fg) 5%, transparent); border: 1px solid var(--edge); border-radius: 999px; padding: 2px 11px; font-size: 12px; color: color-mix(in srgb, var(--fg) 90%, var(--bg)); max-width: 48%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip:hover { color: var(--fg); border-color: color-mix(in srgb, var(--fg) 62%, var(--bg)); background: color-mix(in srgb, var(--fg) 13%, transparent); }
+.chip[data-tone="plan"] { color: color-mix(in srgb, var(--teal) 72%, var(--fg)); border-color: color-mix(in srgb, var(--teal) 70%, var(--bg)); background: color-mix(in srgb, var(--teal) 13%, transparent); }
+.chip[data-tone="edit"] { color: color-mix(in srgb, var(--gold) 72%, var(--fg)); border-color: color-mix(in srgb, var(--gold) 70%, var(--bg)); background: color-mix(in srgb, var(--gold) 13%, transparent); }
+.chip[data-tone="danger"] { color: var(--error); border-color: color-mix(in srgb, var(--error) 70%, var(--bg)); background: color-mix(in srgb, var(--error) 13%, transparent); }
+.chip.plus { padding: 0 9px; font-size: 15px; line-height: 1.35; color: color-mix(in srgb, var(--gold) 72%, var(--fg)); border-color: color-mix(in srgb, var(--gold) 65%, var(--bg)); background: color-mix(in srgb, var(--gold) 12%, transparent); }
 .send { width: 28px; height: 28px; border-radius: 50%; border: 0; background: var(--gold); color: #1d1708; font-weight: 700; }
 .send:disabled { opacity: .35; cursor: default; }
 .send.stop { background: var(--error); color: #fff; }

@@ -38,7 +38,7 @@ const userData = join(work, "user-data");
 for (const d of [workspace, join(userData, "User")]) mkdirSync(d, { recursive: true });
 writeFileSync(
   join(userData, "User", "settings.json"),
-  JSON.stringify({ "window.dialogStyle": "custom", "workbench.startupEditor": "none", "security.workspace.trust.enabled": false, "telemetry.telemetryLevel": "off", "update.mode": "none", "extensions.autoCheckUpdates": false, "workbench.tips.enabled": false, "window.restoreWindows": "none", "workbench.colorTheme": "Default Dark Modern", "chat.disableAIFeatures": true, "window.dialogStyle": "custom", "workbench.secondarySideBar.defaultVisibility": "hidden" }, null, 2),
+  JSON.stringify({ ...(process.env.E2E_THEME ? { "workbench.colorTheme": process.env.E2E_THEME } : {}), "window.dialogStyle": "custom", "workbench.startupEditor": "none", "security.workspace.trust.enabled": false, "telemetry.telemetryLevel": "off", "update.mode": "none", "extensions.autoCheckUpdates": false, "workbench.tips.enabled": false, "window.restoreWindows": "none", "workbench.colorTheme": "Default Dark Modern", "chat.disableAIFeatures": true, "window.dialogStyle": "custom", "workbench.secondarySideBar.defaultVisibility": "hidden" }, null, 2),
 );
 writeFileSync(join(workspace, "hello.txt"), "hello from the capella e2e\n");
 writeFileSync(join(workspace, "index.html"), "<!doctype html><title>Capella static preview</title><h1>Static page OK</h1>");
