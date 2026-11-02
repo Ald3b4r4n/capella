@@ -97,7 +97,21 @@ export interface McpRowView {
   summary?: string;
 }
 
+/** One provider in the Accounts section: how it can be connected and how it is. No secret is ever part of it. */
+export interface AccountView {
+  id: string;
+  name: string;
+  /** Zen (the console) and Go: shown first. */
+  featured: boolean;
+  canKey: boolean;
+  oauth: Array<{ id: string; label: string }>;
+  connections: Array<{ id?: string; label: string; kind: "credential" | "env"; method?: string; active?: boolean; envName?: string }>;
+}
+
 export interface ToolsView {
+  accounts: AccountView[];
+  /** 1.x: no browser sign-in from here. */
+  canOauth: boolean;
   mcp: McpRowView[];
   skills: Array<{ name: string; description?: string; openable: boolean }>;
   plugins: Array<{ source: string; state: string }>;
@@ -149,6 +163,10 @@ export type FromWebview =
   | { type: "mcpAdd" }
   | { type: "mcpRemove"; name: string }
   | { type: "openSkill"; name: string }
+  /** `method`: "key", or the id of one of the provider's browser sign-ins. */
+  | { type: "accountConnect"; id: string; method: string }
+  | { type: "accountDisconnect"; id: string; connectionId?: string }
+  | { type: "accountActivate"; connectionId: string }
   | { type: "addFolder" }
   | { type: "removeFolder"; path: string }
   | { type: "loadImage"; src: string }

@@ -286,3 +286,17 @@ test("on 1.x: MCP servers are listed by name, added, switched off and 'removed' 
   assert.deepEqual((await session.skills()).map((s) => [s.name, s.path]), [["pdf", "/skills/pdf/SKILL.md"]]);
   assert.deepEqual(await session.plugins(), [{ source: "config: some-plugin@1.2.3", state: "configured" }, { source: "config: other-plugin", state: "configured" }]);
 });
+
+test("on 1.x: providers come from /provider with the connected ones marked, a key is stored with PUT /auth and removed with DELETE, and a browser sign-in says to use the terminal", async () => {
+  const { session } = make("review");
+  await session.start();
+  const first = await session.accounts();
+  assert.deepEqual(first.map((a) => [a.id, a.connections.length, a.key, a.oauth.length]), [["opencode", 1, true, 0], ["opencode-go", 0, true, 0]]);
+  await session.connectKey("opencode-go", "A-1X-KEY-789");
+  const sent = (await (session as unknown as { client: OpencodeClient }).client.get<Array<{ method: string; path: string; body: Record<string, unknown> }>>("/api/calls")).find((c) => c.method === "PUT" && c.path === "/auth/opencode-go")!;
+  assert.deepEqual(sent.body, { type: "api", key: "A-1X-KEY-789" });
+  assert.equal((await session.accounts()).find((a) => a.id === "opencode-go")!.connections.length, 1);
+  await session.disconnect("opencode-go");
+  assert.equal((await session.accounts()).find((a) => a.id === "opencode-go")!.connections.length, 0);
+  await assert.rejects(session.oauthStart("opencode", "x", {}), /opencode auth login/);
+});

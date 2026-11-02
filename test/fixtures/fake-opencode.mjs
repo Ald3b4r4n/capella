@@ -35,6 +35,15 @@ const readBody = (req) =>
 // Messages sent while a turn runs: `delivery: "queue"` waits for the end of the work, `steer` joins it at the next step.
 const inbox = [];
 let mcp = [{ name: "docs", status: { status: "connected" } }];
+// Providers and their stored credentials. `GET /api/credential` carries the secrets themselves, like the real one.
+let credentials = [{ id: "cred_zen1", integrationID: "opencode", label: "Default", active: true, method: "oauth", value: { type: "oauth", access: "SECRET-ACCESS", refresh: "SECRET-REFRESH" } }];
+let oauthPolls = 0;
+let credentialCounter = 0;
+const integrations = () => [
+  { id: "opencode", name: "OpenCode Console", metadata: {}, methods: [{ type: "key", label: "API key (service account)" }, { type: "env", names: ["OPENCODE_API_KEY"] }, { id: "device", type: "oauth", label: "OpenCode Console account", form: [{ key: "server", hidden: true, type: "string", default: "https://opencode.ai/console" }] }] },
+  { id: "opencode-go", name: "OpenCode Go", metadata: {}, methods: [{ type: "key" }, { type: "env", names: ["OPENCODE_API_KEY"] }] },
+  { id: "github-copilot", name: "GitHub Copilot", metadata: {}, methods: [{ id: "device", type: "oauth", label: "Login with GitHub Copilot", form: [{ key: "deploymentType", title: "Select GitHub deployment type", required: true, type: "string", options: [{ value: "github.com", label: "GitHub.com" }, { value: "enterprise", label: "GitHub Enterprise" }] }] }] },
+].map((i) => ({ ...i, connections: credentials.filter((c) => c.integrationID === i.id).map((c) => ({ type: "credential", id: c.id, label: c.label, method: c.method })) }));
 let running = false;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -195,6 +204,44 @@ const server = createServer(async (req, res) => {
     const server = mcp.find((s) => s.name === decodeURIComponent(mcpRoute[1]));
     if (!server) return json(res, 404, { message: "no such server" });
     server.status = mcpRoute[2] === "connect" ? { status: "connected" } : { status: "disabled" };
+    return json(res, 200);
+  }
+  if (req.method === "GET" && path === "/api/integration") return json(res, 200, { location: { directory: "x" }, data: integrations() });
+  if (req.method === "GET" && path === "/api/credential") return json(res, 200, { data: credentials.map(({ method, ...c }) => c) });
+  const keyRoute = /^\/api\/integration\/([^/]+)\/connect\/key$/.exec(path);
+  if (keyRoute && req.method === "POST") {
+    if (body.key === "BAD-KEY") return json(res, 400, { message: "The key BAD-KEY was rejected" });
+    for (const c of credentials) if (c.integrationID === keyRoute[1]) c.active = false;
+    credentials.push({ id: "cred_new" + ++credentialCounter, integrationID: keyRoute[1], label: body.label ?? "API key", active: true, method: "key", value: { type: "key", key: body.key } });
+    return json(res, 200);
+  }
+  const oauthStartRoute = /^\/api\/integration\/([^/]+)\/connect\/oauth$/.exec(path);
+  if (oauthStartRoute && req.method === "POST") {
+    oauthPolls = 0;
+    const code = body.methodID === "code-flow";
+    return json(res, 200, { location: { directory: "x" }, data: { attemptID: "con_attempt1", url: "https://example.com/device?user_code=ABCD", instructions: "Enter code: ABCD", mode: code ? "code" : "auto", time: { created: 1, expires: Date.now() + 600000 } } });
+  }
+  const oauthAttempt = /^\/api\/integration\/([^/]+)\/connect\/oauth\/(con_\w+)(\/complete)?$/.exec(path);
+  if (oauthAttempt && req.method === "GET") {
+    oauthPolls++;
+    if (oauthPolls >= 2 && !credentials.some((c) => c.id === "cred_oauth1")) credentials.push({ id: "cred_oauth1", integrationID: oauthAttempt[1], label: "Default", active: true, method: "oauth", value: { type: "oauth", access: "SECRET-ACCESS2" } });
+    return json(res, 200, { location: { directory: "x" }, data: { status: oauthPolls >= 2 ? "complete" : "pending", time: { created: 1, expires: 2 } } });
+  }
+  if (oauthAttempt && req.method === "POST" && oauthAttempt[3]) {
+    if (body.code === "WRONG") return json(res, 400, { message: "bad code WRONG" });
+    credentials.push({ id: "cred_oauth2", integrationID: oauthAttempt[1], label: "Default", active: true, method: "oauth", value: { type: "oauth", access: "SECRET-ACCESS3" } });
+    return json(res, 200);
+  }
+  if (oauthAttempt && req.method === "DELETE") return json(res, 200);
+  const credRoute = /^\/api\/credential\/(cred_\w+)(\/activate)?$/.exec(path);
+  if (credRoute && req.method === "DELETE") {
+    credentials = credentials.filter((c) => c.id !== credRoute[1]);
+    return json(res, 200);
+  }
+  if (credRoute && req.method === "POST" && credRoute[2]) {
+    const target = credentials.find((c) => c.id === credRoute[1]);
+    if (!target) return json(res, 404, { message: "no such credential" });
+    for (const c of credentials) if (c.integrationID === target.integrationID) c.active = c.id === target.id;
     return json(res, 200);
   }
   if (req.method === "GET" && path === "/api/plugin") return json(res, 200, { location: { directory: "x" }, data: [{ id: "opencode.core", source: { type: "builtin" }, features: {}, state: { status: "active" } }, { id: "my-plugin", source: { type: "npm", name: "my-plugin@1.0.0" }, features: {}, state: { status: "active" } }] });

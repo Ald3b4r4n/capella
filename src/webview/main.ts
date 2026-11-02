@@ -845,8 +845,72 @@ function toolsSection(title: string, hint?: string): HTMLElement {
   return box;
 }
 
+let accountFilter = "";
+
+function paintAccounts(tools: ToolsView, into: HTMLElement): void {
+  const search = el("input");
+  search.type = "search";
+  search.placeholder = "Search providers…";
+  search.value = accountFilter;
+  search.setAttribute("aria-label", "Search providers");
+  const list = el("div");
+  const rows = (): void => {
+    list.replaceChildren();
+    const q = accountFilter.trim().toLowerCase();
+    const connectedOf = (a: ToolsView["accounts"][number]) => a.connections.length > 0;
+    const shown = tools.accounts
+      .filter((a) => (q === "" ? a.featured || connectedOf(a) : `${a.name} ${a.id}`.toLowerCase().includes(q)))
+      .sort((a, b) => Number(b.featured) - Number(a.featured) || Number(connectedOf(b)) - Number(connectedOf(a)) || a.name.localeCompare(b.name))
+      .slice(0, 40);
+    for (const account of shown) {
+      const row = el("div", "session");
+      const text = el("div", "session-text");
+      text.append(el("div", "session-title", account.id === "opencode" ? "OpenCode Zen (console)" : account.name));
+      const parts = account.connections.map((c) => (c.kind === "env" ? `variable ${c.envName ?? c.label}` : `${c.label}${c.method ? " (" + c.method + ")" : ""}${c.active === false ? ", not in use" : ""}`));
+      text.append(el("div", "session-meta faint", parts.length > 0 ? "Connected: " + parts.join("; ") : "Not connected"));
+      const actions = el("div", "session-actions");
+      actions.append(el("span", `badge ${account.connections.length > 0 ? "connected" : "disabled"}`, account.connections.length > 0 ? "connected" : "not connected"));
+      const addButton = (label: string, method: string, title?: string): void => {
+        const b = el("button", "btn", label);
+        b.type = "button";
+        if (title) b.title = title;
+        b.addEventListener("click", () => post({ type: "accountConnect", id: account.id, method }));
+        actions.append(b);
+      };
+      if (account.canKey) addButton(account.connections.some((c) => c.kind === "credential") ? "Add another key" : "API key", "key", "Paste an API key: it is typed in the editor's own box and stored by opencode");
+      for (const o of account.oauth) addButton(o.label.length > 28 ? o.label.slice(0, 27) + "\u2026" : o.label, o.id, o.label);
+      const credentials = account.connections.filter((c) => c.kind === "credential" && c.id);
+      for (const c of credentials) {
+        if (credentials.length > 1 && c.active === false) {
+          const use = el("button", "btn", "Use");
+          use.type = "button";
+          use.title = `Use ${c.label}`;
+          use.addEventListener("click", () => post({ type: "accountActivate", connectionId: c.id! }));
+          actions.append(use);
+        }
+        const out = el("button", "btn", credentials.length > 1 ? `Sign out ${c.label}` : "Sign out");
+        out.type = "button";
+        out.addEventListener("click", () => post({ type: "accountDisconnect", id: account.id, connectionId: c.id }));
+        actions.append(out);
+      }
+      row.append(text, actions);
+      list.append(row);
+    }
+    if (shown.length === 0) list.append(el("div", "faint pad", q === "" ? "No provider is connected." : "No provider matches."));
+    if (q === "") list.append(el("div", "faint small pad", `${tools.accounts.length} providers are available: search to connect another.`));
+  };
+  search.addEventListener("input", () => {
+    accountFilter = search.value;
+    rows();
+  });
+  into.append(search, list);
+  rows();
+}
+
 function paintTools(tools: ToolsView): void {
   toolsBody.replaceChildren();
+  const accounts = toolsSection("Accounts", tools.canOauth ? "Zen and Go, and every other provider opencode knows. A key is stored by opencode, not by Capella." : "Zen and Go, and every other provider opencode knows. A key is stored by opencode, not by Capella. Browser sign-ins need opencode 2.x (use \`opencode auth login\` here).");
+  paintAccounts(tools, accounts);
   const mcp = toolsSection("MCP servers", "Their tools are asked about before they run, except in Bypass mode.");
   for (const server of tools.mcp) {
     const row = el("div", "session");

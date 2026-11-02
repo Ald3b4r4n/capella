@@ -343,3 +343,50 @@ test("skills and the plugins that are not built in", async () => {
   assert.deepEqual((await session.skills()).map((s) => s.name), ["pdf"]);
   assert.deepEqual(await session.plugins(), [{ id: "my-plugin", source: "npm: my-plugin@1.0.0", state: "active" }]);
 });
+
+test("accounts: listed without any secret even though the credential route carries them; a key is connected, a credential made active, then signed out", async () => {
+  const { session } = make();
+  await session.start();
+  const first = await session.accounts();
+  assert.deepEqual(first.map((a) => a.id), ["opencode", "opencode-go", "github-copilot"]);
+  assert.equal(JSON.stringify(first).includes("SECRET"), false, "no key, access or refresh token in what the page can get");
+  const zen = first.find((a) => a.id === "opencode")!;
+  assert.deepEqual([zen.key, zen.oauth.map((o) => o.id), zen.connections], [true, ["device"], [{ kind: "credential", id: "cred_zen1", label: "Default", method: "oauth", active: true }]]);
+  assert.deepEqual(first.find((a) => a.id === "opencode-go")!.connections, []);
+  const copilot = first.find((a) => a.id === "github-copilot")!;
+  assert.deepEqual(copilot.oauth[0]!.form.map((f) => [f.key, f.required, f.options?.map((o) => o.value)]), [["deploymentType", true, ["github.com", "enterprise"]]]);
+
+  await session.connectKey("opencode-go", "A-REAL-LOOKING-KEY-123", "Capella");
+  const sent = (await (session as unknown as { client: OpencodeClient }).client.get<Array<{ method: string; path: string; body: Record<string, unknown> }>>("/api/calls")).find((c) => c.path === "/api/integration/opencode-go/connect/key")!;
+  assert.deepEqual(sent.body, { key: "A-REAL-LOOKING-KEY-123", label: "Capella" });
+  const after = (await session.accounts()).find((a) => a.id === "opencode-go")!;
+  assert.equal(after.connections.length, 1);
+  assert.equal(JSON.stringify(await session.accounts()).includes("A-REAL-LOOKING-KEY"), false);
+  const id = after.connections[0]!.id!;
+
+  await session.connectKey("opencode-go", "SECOND-KEY-456", "Second");
+  const two = (await session.accounts()).find((a) => a.id === "opencode-go")!.connections;
+  assert.deepEqual(two.map((c) => [c.label, c.active]), [["Capella", false], ["Second", true]]);
+  await session.activate(id);
+  assert.deepEqual((await session.accounts()).find((a) => a.id === "opencode-go")!.connections.map((c) => [c.label, c.active]), [["Capella", true], ["Second", false]]);
+  await session.disconnect("opencode-go", id);
+  assert.equal((await session.accounts()).find((a) => a.id === "opencode-go")!.connections.length, 1);
+  await assert.rejects(session.disconnect("opencode-go", "../../x"), /not a valid id/);
+  await assert.rejects(session.connectKey("../x", "k"), /not a valid id/);
+});
+
+test("a browser sign-in: opencode gives the address and the code, the host polls it until it is complete; a code flow is completed with the pasted code; it can be cancelled", async () => {
+  const { session } = make();
+  await session.start();
+  const attempt = await session.oauthStart("opencode", "device", { server: "https://opencode.ai/console" });
+  assert.deepEqual([attempt.attemptId, attempt.url, attempt.instructions, attempt.mode], ["con_attempt1", "https://example.com/device?user_code=ABCD", "Enter code: ABCD", "auto"]);
+  assert.equal((await session.oauthStatus("opencode", attempt.attemptId)).status, "pending");
+  assert.equal((await session.oauthStatus("opencode", attempt.attemptId)).status, "complete");
+  assert.ok((await session.accounts()).find((a) => a.id === "opencode")!.connections.some((c) => c.id === "cred_oauth1"));
+  const code = await session.oauthStart("opencode", "code-flow", {});
+  assert.equal(code.mode, "code");
+  await assert.rejects(session.oauthComplete("opencode", code.attemptId, "WRONG"), /bad code/);
+  await session.oauthComplete("opencode", code.attemptId, "RIGHT");
+  assert.ok((await session.accounts()).find((a) => a.id === "opencode")!.connections.some((c) => c.id === "cred_oauth2"));
+  await session.oauthCancel("opencode", code.attemptId);
+});

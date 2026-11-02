@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { Backend, McpConfig, McpServerInfo, ModelRef, PluginInfo, PromptFile, PromptOptions, SkillInfo, SlashEntry } from "./backend.ts";
+import type { AccountInfo, Backend, McpConfig, McpServerInfo, ModelRef, OauthAttempt, OauthStatus, PluginInfo, PromptFile, PromptOptions, SkillInfo, SlashEntry } from "./backend.ts";
 import { BackendV1 } from "./backend-v1.ts";
 import { BackendV2 } from "./backend-v2.ts";
 import { EventStream, OpencodeClient } from "./client.ts";
@@ -264,6 +264,38 @@ export class OpencodeSession extends EventEmitter {
 
   async mcpList(): Promise<McpServerInfo[]> {
     return this.requireBackend().mcpList();
+  }
+
+  async accounts(): Promise<AccountInfo[]> {
+    return this.requireBackend().accounts();
+  }
+
+  async connectKey(integrationId: string, key: string, label?: string): Promise<void> {
+    await this.requireBackend().connectKey(integrationId, key, label);
+  }
+
+  async oauthStart(integrationId: string, methodId: string, answers: Record<string, string>): Promise<OauthAttempt> {
+    return this.requireBackend().oauthStart(integrationId, methodId, answers);
+  }
+
+  async oauthStatus(integrationId: string, attemptId: string): Promise<OauthStatus> {
+    return this.requireBackend().oauthStatus(integrationId, attemptId);
+  }
+
+  async oauthComplete(integrationId: string, attemptId: string, code?: string): Promise<void> {
+    await this.requireBackend().oauthComplete(integrationId, attemptId, code);
+  }
+
+  async oauthCancel(integrationId: string, attemptId: string): Promise<void> {
+    await this.requireBackend().oauthCancel(integrationId, attemptId).catch(() => undefined);
+  }
+
+  async disconnect(integrationId: string, connectionId?: string): Promise<void> {
+    await this.requireBackend().disconnect(integrationId, connectionId);
+  }
+
+  async activate(credentialId: string): Promise<void> {
+    await this.requireBackend().activate(credentialId);
   }
 
   /** Adds a server and rewrites the rules so that its tools are asked about like the rest. */

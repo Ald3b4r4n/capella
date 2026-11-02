@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.5 (unreleased)
+
+- **Accounts** (Tools, first section): connect Zen, Go or any other provider with an API key (masked box, stored by opencode; Capella keeps nothing and scrubs the key from any error) or, on 2.x, with a browser sign-in that opencode runs (the address and the code are shown and the site is named before anything opens); several keys per provider with **Use**; **Sign out** asks first. The model list and the usage meter are read again after a change.
+- The credential route of opencode carries the secrets themselves; Capella reads only the ids and the active flag from it. `scripts/check-accounts.ts` checks the flow against a real opencode with a dummy key in a throwaway home; `E2E_ACCOUNTS=1` does the same in an editor, never in your own opencode.
+
 ## 0.1.4 (2026-11-02)
 
 - **Tools panel:** the MCP servers, skills and plugins of your opencode. MCP servers can be turned off and on, and added with **Add an MCP server…** (name, then a command or an https address; a question shows exactly what will run). Servers added in Capella are kept per project and registered again in each chat (opencode forgets them on restart) and can be removed. Skills open their file; plugins are listed.

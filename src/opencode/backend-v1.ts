@@ -1,4 +1,4 @@
-import type { Backend, McpConfig, McpServerInfo, McpStatus, ModelRef, PendingApproval, PluginInfo, PromptFile, PromptOptions, SkillInfo, SlashEntry } from "./backend.ts";
+import type { AccountInfo, Backend, McpConfig, McpServerInfo, McpStatus, ModelRef, PendingApproval, OauthAttempt, OauthStatus, PluginInfo, PromptFile, PromptOptions, SkillInfo, SlashEntry } from "./backend.ts";
 import type { OpencodeClient } from "./client.ts";
 import { familyOf, type MapResult, type ModelInfo } from "./events.ts";
 import { V1EventMapper } from "./events-v1.ts";
@@ -143,6 +143,45 @@ export class BackendV1 implements Backend {
     const parts = files.map((f) => ({ type: "file", mime: mimeFor(f), url: f.uri, filename: f.name }));
     // The legacy route answers when the command has finished; the turn itself streams as events, so it is not awaited.
     void this.client.request("POST", `/session/${sessionId}/command`, { body: { command: name, arguments: args, model: `${this.model.providerId}/${this.model.modelId}`, agent: this.agent, ...(this.effort ? { variant: this.effort } : {}), ...(parts.length > 0 ? { parts } : {}) }, timeoutMs: 10 * 60 * 1000 }).catch(() => undefined);
+  }
+
+  async accounts(): Promise<AccountInfo[]> {
+    const rows = await this.client.get<{ all?: Array<{ id?: unknown; name?: unknown; env?: unknown }>; connected?: unknown }>("/provider");
+    const connected = new Set(Array.isArray(rows?.connected) ? rows.connected.filter((c): c is string => typeof c === "string") : []);
+    return (rows?.all ?? []).flatMap((p): AccountInfo[] => {
+      if (typeof p.id !== "string") return [];
+      const envNames = Array.isArray(p.env) ? p.env.filter((e): e is string => typeof e === "string") : [];
+      // 1.x does not say whether a provider is connected by a stored login or by a variable: it only says it is connected.
+      return [{ id: p.id, name: typeof p.name === "string" ? p.name : p.id, key: true, oauth: [], connections: connected.has(p.id) ? [{ kind: "credential", id: p.id, label: "Connected", method: envNames.length > 0 ? "key or environment" : "key" }] : [] }];
+    });
+  }
+
+  async connectKey(integrationId: string, key: string): Promise<void> {
+    await this.client.request("PUT", `/auth/${encodeURIComponent(integrationId)}`, { body: { type: "api", key } });
+  }
+
+  async oauthStart(): Promise<OauthAttempt> {
+    throw new Error("Signing in with a browser is not available through opencode 1.x here: run `opencode auth login` in a terminal.");
+  }
+
+  async oauthStatus(): Promise<OauthStatus> {
+    return { status: "unknown" };
+  }
+
+  async oauthComplete(): Promise<void> {
+    throw new Error("not available on opencode 1.x");
+  }
+
+  async oauthCancel(): Promise<void> {
+    /* nothing was started */
+  }
+
+  async disconnect(integrationId: string): Promise<void> {
+    await this.client.request("DELETE", `/auth/${encodeURIComponent(integrationId)}`);
+  }
+
+  async activate(): Promise<void> {
+    throw new Error("not available on opencode 1.x");
   }
 
   async mcpList(): Promise<McpServerInfo[]> {

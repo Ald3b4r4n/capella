@@ -66,6 +66,57 @@ export interface PluginInfo {
   state: string;
 }
 
+/** One question of a sign-in form (GitHub Copilot asks which GitHub it is, for instance). */
+export interface FormField {
+  key: string;
+  title: string;
+  required: boolean;
+  options?: Array<{ value: string; label: string }>;
+  /** Not asked: the default is used. */
+  hidden?: boolean;
+  default?: string;
+}
+
+export interface OauthMethod {
+  id: string;
+  label: string;
+  form: FormField[];
+}
+
+/** One way a provider is connected: a credential opencode stores, or an environment variable it reads. Never the secret itself. */
+export interface AccountConnection {
+  id?: string;
+  label: string;
+  kind: "credential" | "env";
+  method?: string;
+  active?: boolean;
+  envName?: string;
+}
+
+/** A provider (opencode calls it an integration) and how it is connected. Whitelisted: no key, token or refresh token passes through here. */
+export interface AccountInfo {
+  id: string;
+  name: string;
+  /** Can be connected by pasting an API key. */
+  key: boolean;
+  oauth: OauthMethod[];
+  connections: AccountConnection[];
+}
+
+export interface OauthAttempt {
+  attemptId: string;
+  url: string;
+  instructions: string;
+  /** `auto`: opencode finishes by itself once the user has signed in; `code`: the user pastes a code back. */
+  mode: "auto" | "code";
+  expiresAt?: number;
+}
+
+export interface OauthStatus {
+  status: "pending" | "complete" | "failed" | "expired" | "unknown";
+  message?: string;
+}
+
 export interface PendingApproval {
   id: string;
   sessionId: string;
@@ -105,6 +156,18 @@ export interface Backend {
   runCommand(sessionId: string, name: string, args: string, files: readonly PromptFile[]): Promise<void>;
   /** Asks the server to summarise the conversation to free context. */
   compact(sessionId: string): Promise<void>;
+  /** The providers and how each is connected, without any secret. */
+  accounts(): Promise<AccountInfo[]>;
+  /** Stores an API key in opencode for this provider. The key is never logged, echoed or kept by Capella. */
+  connectKey(integrationId: string, key: string, label?: string): Promise<void>;
+  oauthStart(integrationId: string, methodId: string, answers: Record<string, string>): Promise<OauthAttempt>;
+  oauthStatus(integrationId: string, attemptId: string): Promise<OauthStatus>;
+  oauthComplete(integrationId: string, attemptId: string, code?: string): Promise<void>;
+  oauthCancel(integrationId: string, attemptId: string): Promise<void>;
+  /** Removes one connection (2.x: a stored credential by id; 1.x: the provider's stored login). */
+  disconnect(integrationId: string, connectionId?: string): Promise<void>;
+  /** 2.x: makes this stored credential the one used. */
+  activate(credentialId: string): Promise<void>;
   mcpList(): Promise<McpServerInfo[]>;
   /** Registers a server for this running opencode only (it is gone when the server restarts) and connects it. */
   mcpAdd(name: string, config: McpConfig): Promise<void>;

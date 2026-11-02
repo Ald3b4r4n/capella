@@ -60,7 +60,8 @@ mkdirSync(libFolder, { recursive: true });
 // "Add an MCP server" is driven for real (quick picks, input boxes and the question), with a tiny stdio server of the test fixtures.
 const miniMcp = join(root, "test", "fixtures", "mini-mcp.mjs");
 const childEnv = { ...process.env, CAPELLA_TRACE_FILE: traceFile, CAPELLA_DEV_ADD_FOLDER: libFolder };
-if (V1) {
+// E2E_ACCOUNTS connects and signs out a DUMMY key: that runs in a throwaway home (like 1.x), never in your own opencode.
+if (V1 || process.env.E2E_ACCOUNTS) {
   const v1Home = join(work, "v1-home");
   Object.assign(childEnv, { HOME: v1Home, USERPROFILE: v1Home, XDG_CONFIG_HOME: join(v1Home, "c"), XDG_DATA_HOME: join(v1Home, "d"), XDG_STATE_HOME: join(v1Home, "s"), XDG_CACHE_HOME: join(v1Home, "k") });
   for (const name of Object.keys(childEnv)) if (/(_API_KEY|_TOKEN|_SECRET)$/i.test(name)) delete childEnv[name];
@@ -403,7 +404,7 @@ try {
   const toolsChecks = async () => {
     await evalWeb("(() => { d.getElementById('toolsBtn').click(); return true; })()");
     const first = await waitFor("the Tools panel", () => evalWeb("(() => { const t = d.getElementById('tools'); const b = d.getElementById('toolsBody'); return !t.hidden && b.querySelector('.tools-section') ? [...b.querySelectorAll('h3')].map(h => h.textContent) : null; })()"), 20000).catch(() => null);
-    check("the Tools panel lists MCP servers, skills and plugins", !!first && first.length === 3 && /^MCP servers/.test(first[0]) && /^Skills \(\d+\)/.test(first[1]) && /^Plugins/.test(first[2]), JSON.stringify(first));
+    check("the Tools panel lists accounts, MCP servers, skills and plugins", !!first && first.length === 4 && first[0] === "Accounts" && /^MCP servers/.test(first[1]) && /^Skills \(\d+\)/.test(first[2]) && /^Plugins/.test(first[3]), JSON.stringify(first));
     await shot("33-tools");
     const rowOf = (name) => `[...d.querySelectorAll('#toolsBody .session')].find(r => r.querySelector('.session-title').textContent === ${JSON.stringify(name)})`;
     const addMcp = "(() => { [...d.querySelectorAll('#toolsBody .btn')].find(b => /^Add an MCP server/.test(b.textContent)).click(); return true; })()";
@@ -443,6 +444,68 @@ try {
     await evalWeb("(() => { d.getElementById('toolsClose').click(); return true; })()");
     check("Close hides the panel", await evalWeb("d.getElementById('tools').hidden"));
   };
+
+  // The Accounts section: connect a DUMMY key through the editor's own masked box, see it connected, sign out. Throwaway home only.
+  const accountsChecks = async () => {
+    const DUMMY = "DUMMY-NOT-A-REAL-KEY-e2e-Zq81xK";
+    await evalWeb("(() => { d.getElementById('toolsBtn').click(); return true; })()");
+    const first = await waitFor("the accounts", () => evalWeb("(() => { const s = [...d.querySelectorAll('#toolsBody .tools-section')].find(x => x.querySelector('h3').textContent === 'Accounts'); return s ? [...s.querySelectorAll('.session-title')].map(x => x.textContent) : null; })()"), 30000).catch(() => null);
+    console.log("accounts:", JSON.stringify(first));
+    check("Accounts lists Zen and Go first", !!first && first[0] === "OpenCode Zen (console)" && first.includes("OpenCode Go"), JSON.stringify(first));
+    const row = (name) => `[...d.querySelectorAll('#toolsBody .tools-section')].find(x => x.querySelector('h3').textContent === 'Accounts') && [...d.querySelectorAll('#toolsBody .session')].find(r => r.querySelector('.session-title').textContent === ${JSON.stringify(name)})`;
+    const badge = (name) => evalWeb(`(() => { const r = ${row(name)}; return r ? r.querySelector('.badge').textContent : null; })()`);
+    await shot("37-accounts");
+
+    // search another provider, and connect a key to it
+    await evalWeb("(() => { const i = d.querySelector('#toolsBody input[type=search]'); i.value = 'anthropic'; i.dispatchEvent(new Event('input')); return true; })()");
+    await waitFor("the Anthropic row", () => evalWeb(`!!${row("Anthropic")}`), 10000);
+    check("a provider found by search starts as not connected", (await badge("Anthropic")) === "not connected");
+    const clickOf = (name, label) => `(() => { [...${row(name)}.querySelectorAll('.btn')].find(b => b.textContent === ${JSON.stringify(label)}).click(); return true; })()`;
+    // Escape in the key box adds nothing
+    await evalWeb(clickOf("Anthropic", "API key"));
+    await waitFor("the key box", () => evalPage("!!document.querySelector('.quick-input-widget:not([style*=\"display: none\"]) input')"), 15000);
+    const masked = await evalPage("document.querySelector('.quick-input-widget:not([style*=\"display: none\"]) input').type");
+    check("the key is typed in a masked box", masked === "password", String(masked));
+    await key("rawKeyDown", "Escape", { windowsVirtualKeyCode: 27 });
+    await key("keyUp", "Escape", { windowsVirtualKeyCode: 27 });
+    await sleep(800);
+    check("Escape in the key box connects nothing", (await badge("Anthropic")) === "not connected");
+    await evalWeb(clickOf("Anthropic", "API key"));
+    await inputBox(DUMMY);
+    const connected = await waitFor("connected", async () => ((await badge("Anthropic")) === "connected" ? true : null), 20000).catch(() => false);
+    check("after the key is given the provider shows as connected", !!connected);
+    const page = await evalWeb("d.documentElement.outerHTML + ' ' + d.body.innerText");
+    check("the key appears nowhere in the page", !page.includes(DUMMY));
+    await shot("38-account-connected");
+
+    // a wrong move is not a sign-out: Cancel keeps it
+    await evalWeb(clickOf("Anthropic", "Sign out"));
+    const question = await waitFor("the question", dialogText, 15000).catch(() => null);
+    check("signing out asks first", !!question && /Sign out of Anthropic/.test(question) && /forget the stored credential/.test(question), String(question));
+    await clickDialog("Cancel");
+    check("Cancel keeps the connection", (await badge("Anthropic")) === "connected");
+    await evalWeb(clickOf("Anthropic", "Sign out"));
+    await clickDialog("Sign out");
+    const out = await waitFor("signed out", async () => ((await badge("Anthropic")) === "not connected" ? true : null), 20000).catch(() => false);
+    check("signing out removes it", !!out);
+
+    // the console sign-in (opencode starts it; nothing is opened: the question is cancelled)
+    await evalWeb("(() => { const i = d.querySelector('#toolsBody input[type=search]'); i.value = ''; i.dispatchEvent(new Event('input')); return true; })()");
+    await waitFor("the Zen row", () => evalWeb(`!!${row("OpenCode Zen (console)")}`), 10000);
+    await evalWeb(`(() => { [...${row("OpenCode Zen (console)")}.querySelectorAll('.btn')].find(b => /account/i.test(b.textContent)).click(); return true; })()`);
+    const sign = await waitFor("the sign-in question", dialogText, 30000).catch(() => null);
+    console.log("sign-in question:", JSON.stringify(sign));
+    check("a browser sign-in shows the code and the site before anything is opened", !!sign && /Sign in to/.test(sign) && /Enter code: /.test(sign) && /https:\/\/opencode\.ai/.test(sign) && /never sees it/.test(sign), String(sign));
+    await shot("39-signin-question");
+    await clickDialog("Cancel");
+    await evalWeb("(() => { d.getElementById('toolsClose').click(); return true; })()");
+  };
+
+  if (process.env.E2E_ACCOUNTS) {
+    await accountsChecks();
+    console.log(failed === 0 ? `[${label}] ALL CHECKS PASSED (accounts)` : `[${label}] ${failed} CHECK(S) FAILED (accounts)`);
+    throw Object.assign(new Error("accounts run finished"), { v1Done: true });
+  }
 
   if (process.env.E2E_UI_ONLY) {
     // Only the checks that need no model turn (the free models have a cap of their own).

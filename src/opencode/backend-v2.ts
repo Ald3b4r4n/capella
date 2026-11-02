@@ -1,4 +1,4 @@
-import type { Backend, McpConfig, McpServerInfo, McpStatus, ModelRef, PendingApproval, PluginInfo, PromptFile, PromptOptions, SkillInfo, SlashEntry } from "./backend.ts";
+import type { AccountConnection, AccountInfo, Backend, FormField, McpConfig, McpServerInfo, McpStatus, ModelRef, PendingApproval, OauthAttempt, OauthMethod, OauthStatus, PluginInfo, PromptFile, PromptOptions, SkillInfo, SlashEntry } from "./backend.ts";
 import { ApiError, type OpencodeClient } from "./client.ts";
 import { mapFrame, mapModels, parseFrame, type MapResult, type ModelInfo } from "./events.ts";
 import { mapSessionRows, replayItems, type ReplayItem, type SessionRow } from "./history.ts";
@@ -98,6 +98,62 @@ export class BackendV2 implements Backend {
     await this.client.post(`/api/session/${sessionId}/compact`, {});
   }
 
+  async accounts(): Promise<AccountInfo[]> {
+    type Row = { id?: unknown; name?: unknown; methods?: unknown[]; connections?: unknown[] };
+    const [integrations, credentials] = await Promise.all([
+      this.client.get<{ data?: Row[] }>("/api/integration"),
+      // This route carries the secrets themselves (`value`): only the id and the flags are read, and nothing else is kept.
+      this.client.get<{ data?: Array<{ id?: unknown; active?: unknown }> }>("/api/credential").catch(() => undefined),
+    ]);
+    const active = new Map((credentials?.data ?? []).flatMap((c): Array<[string, boolean]> => (typeof c.id === "string" ? [[c.id, c.active === true]] : [])));
+    const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+    return (integrations?.data ?? []).flatMap((row): AccountInfo[] => {
+      if (typeof row.id !== "string" || typeof row.name !== "string") return [];
+      const methods = (row.methods ?? []).filter(isRecord);
+      const oauth = methods.flatMap((m): OauthMethod[] => (m.type === "oauth" && typeof m.id === "string" ? [{ id: m.id, label: typeof m.label === "string" ? m.label : m.id, form: formOf(m.form) }] : []));
+      const connections = (row.connections ?? []).filter(isRecord).flatMap((c): AccountConnection[] => {
+        if (c.type === "env" && typeof c.name === "string") return [{ kind: "env", label: c.name, envName: c.name }];
+        if (c.type === "credential" && typeof c.id === "string") return [{ kind: "credential", id: c.id, label: typeof c.label === "string" ? c.label : "Credential", method: typeof c.method === "string" ? c.method : undefined, active: active.get(c.id) }];
+        return [];
+      });
+      return [{ id: row.id, name: row.name, key: methods.some((m) => m.type === "key"), oauth, connections }];
+    });
+  }
+
+  async connectKey(integrationId: string, key: string, label?: string): Promise<void> {
+    await this.client.post(`/api/integration/${pathId(integrationId)}/connect/key`, label ? { key, label } : { key });
+  }
+
+  async oauthStart(integrationId: string, methodId: string, answers: Record<string, string>): Promise<OauthAttempt> {
+    const started = await this.client.post<{ data?: { attemptID?: unknown; url?: unknown; instructions?: unknown; mode?: unknown; time?: { expires?: unknown } } }>(`/api/integration/${pathId(integrationId)}/connect/oauth`, { methodID: methodId, ...(Object.keys(answers).length > 0 ? { answer: answers } : {}) });
+    const d = started?.data;
+    if (typeof d?.attemptID !== "string" || typeof d.url !== "string") throw new Error("opencode did not start the sign-in");
+    return { attemptId: d.attemptID, url: d.url, instructions: typeof d.instructions === "string" ? d.instructions : "", mode: d.mode === "code" ? "code" : "auto", expiresAt: typeof d.time?.expires === "number" ? d.time.expires : undefined };
+  }
+
+  async oauthStatus(integrationId: string, attemptId: string): Promise<OauthStatus> {
+    const s = await this.client.get<{ data?: { status?: unknown; message?: unknown } }>(`/api/integration/${pathId(integrationId)}/connect/oauth/${pathId(attemptId)}`);
+    const status = (["pending", "complete", "failed", "expired"] as const).find((v) => v === s?.data?.status) ?? "unknown";
+    return { status, message: typeof s?.data?.message === "string" ? s.data.message : undefined };
+  }
+
+  async oauthComplete(integrationId: string, attemptId: string, code?: string): Promise<void> {
+    await this.client.post(`/api/integration/${pathId(integrationId)}/connect/oauth/${pathId(attemptId)}/complete`, code ? { code } : {});
+  }
+
+  async oauthCancel(integrationId: string, attemptId: string): Promise<void> {
+    await this.client.request("DELETE", `/api/integration/${pathId(integrationId)}/connect/oauth/${pathId(attemptId)}`);
+  }
+
+  async disconnect(_integrationId: string, connectionId?: string): Promise<void> {
+    if (!connectionId) throw new Error("no connection to remove");
+    await this.client.request("DELETE", `/api/credential/${pathId(connectionId)}`);
+  }
+
+  async activate(credentialId: string): Promise<void> {
+    await this.client.post(`/api/credential/${pathId(credentialId)}/activate`);
+  }
+
   async mcpList(): Promise<McpServerInfo[]> {
     const rows = await this.client.get<{ data?: Array<{ name?: unknown; status?: { status?: unknown; error?: unknown } }> }>("/api/mcp");
     return (rows?.data ?? []).flatMap((row): McpServerInfo[] => {
@@ -185,4 +241,22 @@ export class BackendV2 implements Backend {
   }
 
   resetEvents(): void {}
+}
+
+/** An id from the page or the server that becomes part of a URL path: only the shapes opencode uses are let through. */
+export function pathId(id: string): string {
+  if (!/^[A-Za-z0-9._-]{1,120}$/.test(id)) throw new Error("not a valid id");
+  return id;
+}
+
+/** The questions of a sign-in form, as far as Capella can ask them (text, or a choice of options). */
+export function formOf(value: unknown): FormField[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((f): FormField[] => {
+    if (typeof f !== "object" || f === null) return [];
+    const row = f as { key?: unknown; title?: unknown; required?: unknown; options?: unknown; hidden?: unknown; default?: unknown };
+    if (typeof row.key !== "string") return [];
+    const options = Array.isArray(row.options) ? row.options.flatMap((o): Array<{ value: string; label: string }> => (typeof o === "object" && o !== null && typeof (o as { value?: unknown }).value === "string" ? [{ value: (o as { value: string }).value, label: typeof (o as { label?: unknown }).label === "string" ? (o as { label: string }).label : (o as { value: string }).value }] : [])) : undefined;
+    return [{ key: row.key, title: typeof row.title === "string" ? row.title : row.key, required: row.required === true, options: options && options.length > 0 ? options : undefined, hidden: row.hidden === true, default: typeof row.default === "string" ? row.default : undefined }];
+  });
 }

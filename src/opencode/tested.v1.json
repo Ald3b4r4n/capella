@@ -1,6 +1,7 @@
 {
   "version": "1.19.5",
   "usedRoutes": [
+    "DELETE /auth/{providerID}",
     "GET /command",
     "GET /config",
     "GET /config/providers",
@@ -8,6 +9,7 @@
     "GET /global/health",
     "GET /mcp",
     "GET /permission",
+    "GET /provider",
     "GET /session",
     "GET /session/{sessionID}",
     "GET /session/{sessionID}/message",
@@ -22,7 +24,8 @@
     "POST /session/{sessionID}/fork",
     "POST /session/{sessionID}/permissions/{permissionID}",
     "POST /session/{sessionID}/prompt_async",
-    "POST /session/{sessionID}/summarize"
+    "POST /session/{sessionID}/summarize",
+    "PUT /auth/{providerID}"
   ],
-  "fingerprint": "746dcb81bd6b"
+  "fingerprint": "35932a152728"
 }

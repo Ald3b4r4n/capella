@@ -17,8 +17,8 @@ import { extractLocalUrls, isPreviewableUrl, startPreviewServer, type PreviewSer
 import { MODES, DEFAULT_MODE, modeById, type ModeId } from "../opencode/modes.ts";
 import { OpencodeSession, type SessionEvent } from "../opencode/session.ts";
 import { chatHtml } from "./chatHtml.ts";
-import type { AttachmentView, FromWebview, McpRowView, ModeRow, ModelRow, QueueItemView, SlashEntryView, ToolsView, ToWebview } from "./protocol.ts";
-import type { McpConfig } from "../opencode/backend.ts";
+import type { AccountView, AttachmentView, FromWebview, McpRowView, ModeRow, ModelRow, QueueItemView, SlashEntryView, ToolsView, ToWebview } from "./protocol.ts";
+import type { AccountInfo, McpConfig } from "../opencode/backend.ts";
 import { parseCommandLine, validMcpName, validMcpUrl, describeMcp } from "./mcpInput.ts";
 import type { Delivery, SlashEntry } from "../opencode/backend.ts";
 import type { UpdateMonitor } from "./updateMonitor.ts";
@@ -222,7 +222,8 @@ export class ChatPanel {
     const [servers, skills, plugins] = await Promise.all([session.mcpList().catch(() => []), session.skills(), session.plugins()]);
     const mcp: McpRowView[] = servers.map((s) => ({ name: s.name, status: s.status, detail: s.detail, managed: stored.has(s.name), summary: stored.has(s.name) ? describeMcp(stored.get(s.name)!) : undefined }));
     const openable = await Promise.all(skills.map(async (s) => !!s.path && isAbsolute(s.path) && (await stat(s.path).then((i) => i.isFile()).catch(() => false))));
-    return { mcp, skills: skills.map((s, i) => ({ name: s.name, description: s.description, openable: openable[i]! })), plugins: plugins.map((p) => ({ source: p.source, state: p.state })), removeForgets: session.generation === "v2" };
+    const accounts = (await session.accounts().catch(() => [] as AccountInfo[])).map((a): AccountView => ({ id: a.id, name: a.name, featured: a.id === "opencode" || a.id === "opencode-go", canKey: a.key, oauth: a.oauth.map((o) => ({ id: o.id, label: o.label })), connections: a.connections }));
+    return { accounts, canOauth: session.generation === "v2", mcp, skills: skills.map((s, i) => ({ name: s.name, description: s.description, openable: openable[i]! })), plugins: plugins.map((p) => ({ source: p.source, state: p.state })), removeForgets: session.generation === "v2" };
   }
 
   private async postTools(): Promise<void> {
@@ -290,6 +291,154 @@ export class ChatPanel {
     this.notice(`MCP server ${name} added. It may take a few seconds to connect.`);
     setTimeout(() => void this.postTools(), 2500);
     await this.postTools();
+  }
+
+  /** An error text with the secret that was being sent taken out of it, in case a server repeats what it was given. */
+  private scrub(text: string, secret?: string): string {
+    return secret && secret.length >= 4 ? text.split(secret).join("***") : text;
+  }
+
+  /**
+   * Connecting a provider. The key is typed into the editor's own masked box and goes straight to the local opencode, which
+   * stores it: it never reaches the page, a log or a message of Capella's, and it is taken out of an error text. A browser
+   * sign-in is run by opencode (Capella opens the address it gives and waits); Capella never sees the token.
+   */
+  private async connectAccount(integrationId: string, method: string): Promise<void> {
+    const session = await this.ensureSession();
+    if (!session) return;
+    const account = (await session.accounts()).find((a) => a.id === integrationId);
+    if (!account) {
+      this.notice("That provider is not offered by this opencode.", true);
+      return;
+    }
+    if (method === "key") {
+      if (!account.key) {
+        this.notice(`${account.name} cannot be connected with a key.`, true);
+        return;
+      }
+      const key = await vscode.window.showInputBox({ title: `Connect ${account.name}`, prompt: `Paste the API key for ${account.name}. It is stored by opencode, not by Capella.`, password: true, ignoreFocusOut: true, validateInput: (v) => (v.trim() === "" ? "Paste the key." : /\s/.test(v.trim()) ? "A key has no spaces or line breaks." : undefined) });
+      if (!key) return;
+      const secret = key.trim();
+      try {
+        await session.connectKey(account.id, secret, "Capella");
+      } catch (error) {
+        this.notice(`Could not connect ${account.name}: ${this.scrub(error instanceof Error ? error.message : String(error), secret)}`, true);
+        return;
+      }
+      this.notice(`${account.name} is connected.`);
+      await this.afterAccountChange(session);
+      return;
+    }
+    const oauth = account.oauth.find((o) => o.id === method);
+    if (!oauth) {
+      this.notice("That sign-in is not offered.", true);
+      return;
+    }
+    const answers: Record<string, string> = {};
+    for (const field of oauth.form) {
+      if (field.hidden) {
+        if (field.default !== undefined) answers[field.key] = field.default;
+        continue;
+      }
+      let value: string | undefined;
+      if (field.options) {
+        const picked = await vscode.window.showQuickPick(field.options.map((o) => ({ label: o.label, value: o.value })), { title: field.title, placeHolder: field.title });
+        value = picked?.value;
+      } else {
+        value = await vscode.window.showInputBox({ title: field.title, prompt: field.title, value: field.default, ignoreFocusOut: true });
+      }
+      if (value === undefined || (field.required && value === "")) return;
+      answers[field.key] = value;
+    }
+    let attempt;
+    try {
+      attempt = await session.oauthStart(account.id, oauth.id, answers);
+    } catch (error) {
+      this.notice(`Could not start the sign-in: ${error instanceof Error ? error.message : String(error)}`, true);
+      return;
+    }
+    let target: URL;
+    try {
+      target = new URL(attempt.url);
+    } catch {
+      await session.oauthCancel(account.id, attempt.attemptId);
+      this.notice("opencode gave an address that is not valid; the sign-in was cancelled.", true);
+      return;
+    }
+    if (target.protocol !== "https:") {
+      await session.oauthCancel(account.id, attempt.attemptId);
+      this.notice("The sign-in address is not https; it was not opened.", true);
+      return;
+    }
+    const open = "Open in browser";
+    const choice = await vscode.window.showInformationMessage(`Sign in to ${account.name}`, { modal: true, detail: `${attempt.instructions}\n\nCapella will open ${target.origin} in your browser. Sign in there; opencode receives the result, Capella never sees it.` }, open);
+    if (choice !== open) {
+      await session.oauthCancel(account.id, attempt.attemptId);
+      return;
+    }
+    await vscode.env.openExternal(vscode.Uri.parse(target.toString()));
+    if (attempt.mode === "code") {
+      const code = await vscode.window.showInputBox({ title: `Sign in to ${account.name}`, prompt: "Paste the code the page shows", password: true, ignoreFocusOut: true });
+      if (!code) {
+        await session.oauthCancel(account.id, attempt.attemptId);
+        return;
+      }
+      try {
+        await session.oauthComplete(account.id, attempt.attemptId, code.trim());
+      } catch (error) {
+        this.notice(`Could not finish the sign-in: ${this.scrub(error instanceof Error ? error.message : String(error), code.trim())}`, true);
+        return;
+      }
+      this.notice(`${account.name} is connected.`);
+      await this.afterAccountChange(session);
+      return;
+    }
+    const outcome = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Waiting for the sign-in to ${account.name}… ${attempt.instructions}`, cancellable: true }, async (_progress, token) => {
+      const until = Math.min(attempt.expiresAt ?? Date.now() + 10 * 60_000, Date.now() + 10 * 60_000);
+      while (Date.now() < until && !token.isCancellationRequested) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const status = await session.oauthStatus(account.id, attempt.attemptId).catch(() => ({ status: "unknown" as const }));
+        if (status.status === "complete") return "complete";
+        if (status.status === "failed" || status.status === "expired") return status.status;
+      }
+      return token.isCancellationRequested ? "cancelled" : "expired";
+    });
+    if (outcome === "complete") {
+      this.notice(`${account.name} is connected.`);
+      await this.afterAccountChange(session);
+    } else {
+      await session.oauthCancel(account.id, attempt.attemptId);
+      this.notice(outcome === "cancelled" ? "Sign-in cancelled." : `The sign-in did not complete (${outcome}).`, outcome !== "cancelled");
+    }
+  }
+
+  private async disconnectAccount(integrationId: string, connectionId?: string): Promise<void> {
+    const session = this.session;
+    if (!session) return;
+    const account = (await session.accounts()).find((a) => a.id === integrationId);
+    const connection = account?.connections.find((c) => c.id === connectionId);
+    if (!account || !connection || connection.kind !== "credential") {
+      this.notice("That connection can not be removed from here (an environment variable has to be unset where it is set).", true);
+      return;
+    }
+    const go = "Sign out";
+    const choice = await vscode.window.showWarningMessage(`Sign out of ${account.name}?`, { modal: true, detail: `opencode will forget the stored credential "${connection.label}". Chats that use ${account.name} models stop working until it is connected again.` }, go);
+    if (choice !== go) return;
+    try {
+      await session.disconnect(account.id, connection.id);
+    } catch (error) {
+      this.notice(`Could not sign out: ${error instanceof Error ? error.message : String(error)}`, true);
+      return;
+    }
+    this.notice(`Signed out of ${account.name}.`);
+    await this.afterAccountChange(session);
+  }
+
+  /** The model list and the usage meter change with an account: read them again. */
+  private async afterAccountChange(session: OpencodeSession): Promise<void> {
+    await this.postTools();
+    void session.refreshModels().catch(() => undefined);
+    void this.tracker.refresh(session, true);
   }
 
   private async openSkill(name: string): Promise<void> {
@@ -809,6 +958,18 @@ export class ChatPanel {
         }
         case "openSkill":
           await this.openSkill(message.name);
+          break;
+        case "accountConnect":
+          await this.connectAccount(message.id, message.method);
+          break;
+        case "accountDisconnect":
+          await this.disconnectAccount(message.id, message.connectionId);
+          break;
+        case "accountActivate":
+          if (this.session && typeof message.connectionId === "string") {
+            await this.session.activate(message.connectionId).catch((e) => this.notice(e instanceof Error ? e.message : String(e), true));
+            await this.afterAccountChange(this.session);
+          }
           break;
         case "addFolder":
           await this.addFolder();

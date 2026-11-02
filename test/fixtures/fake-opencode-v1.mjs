@@ -10,6 +10,7 @@ const calls = [];
 const listeners = new Set();
 const pending = new Map();
 const mcp = { docs: { status: "connected" } };
+let connected = ["opencode"];
 let n = 0;
 
 const emit = (type, properties) => {
@@ -91,6 +92,12 @@ const server = createServer(async (req, res) => {
     });
   if (req.method === "GET" && path === "/config") return json(res, 200, { username: "x", plugin: ["some-plugin@1.2.3", ["other-plugin", { opt: 1 }]] });
   if (req.method === "GET" && path === "/mcp") return json(res, 200, mcp);
+  if (req.method === "GET" && path === "/provider") return json(res, 200, { all: [{ id: "opencode", name: "OpenCode", env: ["OPENCODE_API_KEY"], models: {} }, { id: "opencode-go", name: "OpenCode Go", env: ["OPENCODE_API_KEY"], models: {} }], default: {}, connected });
+  const authRoute = /^\/auth\/([^/]+)$/.exec(path);
+  if (authRoute && req.method === "DELETE") {
+    connected = connected.filter((c) => c !== authRoute[1]);
+    return json(res, 200, true);
+  }
   if (req.method === "GET" && path === "/skill") return json(res, 200, [{ name: "pdf", description: "Work with PDFs", location: "/skills/pdf/SKILL.md", content: "x" }]);
   if (req.method === "GET" && path === "/command") return json(res, 200, [{ name: "review", description: "Review the changes", template: "", hints: [] }, { name: "pdf", description: "Work with PDFs", source: "skill", template: "", hints: [] }]);
   if (req.method === "GET" && path === "/permission") return json(res, 200, [...pending.values()].map(({ resolve, reply, ...row }) => row));
@@ -113,7 +120,7 @@ const server = createServer(async (req, res) => {
     req.on("close", () => listeners.delete(res));
     return;
   }
-  const body = ["POST", "PATCH"].includes(req.method) ? await readBody(req) : {};
+  const body = ["POST", "PATCH", "PUT"].includes(req.method) ? await readBody(req) : {};
   calls.push({ method: req.method, path, body });
   if (req.method === "POST" && path === "/session") return json(res, 200, { id: "ses_1", title: body.title });
   if (req.method === "PATCH" && /^\/session\/ses_\w+$/.test(path)) return json(res, 200, { id: path.split("/").pop() });
@@ -124,6 +131,12 @@ const server = createServer(async (req, res) => {
     res.writeHead(204).end();
     void wait(30).then(() => runTurn(sid, text));
     return;
+  }
+  if (req.method === "PUT" && /^\/auth\/[^/]+$/.test(path)) {
+    const id = path.split("/").pop();
+    if (body.key === "BAD-KEY") return json(res, 400, { message: "The key BAD-KEY was rejected" });
+    if (!connected.includes(id)) connected.push(id);
+    return json(res, 200, true);
   }
   if (req.method === "POST" && path === "/mcp") {
     mcp[body.name] = { status: "connected" };
