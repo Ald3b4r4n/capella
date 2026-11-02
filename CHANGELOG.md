@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.9 (unreleased)
+## 0.1.9 (2026-11-02)
 
 - **The model menu shows its providers clearly:** a tab for **All**, **Zen**, **Go** and **Other**, each with how many models it holds (the chosen one is filled with the provider's colour: blue for Zen, teal for Go, gold for the rest); each group is a coloured band with its count that stays at the top while its models scroll; the model in use has a tinted row and a gold edge. Choosing a tab keeps the menu open.
 
