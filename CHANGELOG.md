@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.5 (unreleased)
+## 0.1.5 (2026-11-02)
 
 - **Accounts** (Tools, first section): connect Zen, Go or any other provider with an API key (masked box, stored by opencode; Capella keeps nothing and scrubs the key from any error) or, on 2.x, with a browser sign-in that opencode runs (the address and the code are shown and the site is named before anything opens); several keys per provider with **Use**; **Sign out** asks first. The model list and the usage meter are read again after a change.
 - The credential route of opencode carries the secrets themselves; Capella reads only the ids and the active flag from it. `scripts/check-accounts.ts` checks the flow against a real opencode with a dummy key in a throwaway home; `E2E_ACCOUNTS=1` does the same in an editor, never in your own opencode.
