@@ -19,6 +19,7 @@ import { OpencodeSession, type SessionEvent } from "../opencode/session.ts";
 import { chatHtml } from "./chatHtml.ts";
 import type { AccountView, AttachmentView, FromWebview, McpRowView, ModeRow, ModelRow, QueueItemView, SlashEntryView, ToolsView, ToWebview } from "./protocol.ts";
 import type { AccountInfo } from "../opencode/backend.ts";
+import { imagePathsIn } from "./browserPreset.ts";
 import { validMcpName } from "./mcpInput.ts";
 import { McpManager } from "./mcpManager.ts";
 import { summarize } from "./mcpStore.ts";
@@ -169,6 +170,7 @@ export class ChatPanel {
         return;
       }
       if (event.type === "turn-ended") void this.reconcileQueue(session);
+      if (event.type === "tool-result") void this.showToolImages(event.callId, event.text);
       this.post({ type: "event", event });
       this.countFreeUsage(event, session);
       if (event.type !== "resync" && event.type !== "server-exit") this.trackChanges(event);
@@ -217,6 +219,23 @@ export class ChatPanel {
   private async postTools(): Promise<void> {
     const session = await this.ensureSession();
     if (session) this.post({ type: "tools", tools: await this.toolsView(session) });
+  }
+
+  /**
+   * A screenshot the browser server saved is shown under the tool's card: a file in the folder Capella gave it, or in the open
+   * project (a name the model chose lands there). Each is checked as any picture of an answer is: inside those folders, and
+   * really a PNG, JPEG, GIF or WebP, up to 5 MB.
+   */
+  private async showToolImages(callId: string, text: string): Promise<void> {
+    const dir = this.mcp.browserOutDir();
+    const project = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!project) return;
+    const images: string[] = [];
+    for (const path of imagePathsIn(text, dir, project)) {
+      const loaded = await loadAnswerImage(path, [project, dir]);
+      if (loaded.ok) images.push(loaded.uri);
+    }
+    if (images.length > 0) this.post({ type: "toolImages", callId, images });
   }
 
   /** An error text with the secret that was being sent taken out of it, in case a server repeats what it was given. */
@@ -877,6 +896,18 @@ export class ChatPanel {
           const session = await this.ensureSession();
           if (session && (await this.mcp.add(session))) {
             setTimeout(() => void this.postTools(), 2500);
+            await this.postTools();
+          }
+          break;
+        }
+        case "mcpAddBrowser": {
+          if (this.busy) {
+            this.notice("Wait for the current turn to finish before adding a server.", true);
+            break;
+          }
+          const session = await this.ensureSession();
+          if (session && (await this.mcp.addBrowser(session))) {
+            setTimeout(() => void this.postTools(), 4000);
             await this.postTools();
           }
           break;

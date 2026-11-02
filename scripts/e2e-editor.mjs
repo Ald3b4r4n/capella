@@ -8,8 +8,9 @@
 //
 // Usage: node scripts/e2e-editor.mjs <path-to-editor-exe> [label] [providerID/modelID]
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const exe = process.argv[2];
@@ -59,9 +60,16 @@ const libFolder = join(work, "shared-lib");
 mkdirSync(libFolder, { recursive: true });
 // "Add an MCP server" is driven for real (quick picks, input boxes and the question), with a tiny stdio server of the test fixtures.
 const miniMcp = join(root, "test", "fixtures", "mini-mcp.mjs");
+// E2E_BROWSER's one real model turn needs the Go key: it is read here, typed into the Accounts masked box of a throwaway opencode (never printed), and gone with that home.
+let goKey;
+if (process.env.E2E_BROWSER) {
+  const real = JSON.parse(readFileSync(join(homedir(), ".local", "share", "opencode", "auth.json"), "utf8"));
+  goKey = real["opencode-go"]?.key;
+  if (typeof goKey !== "string") throw new Error("no opencode-go key in auth.json");
+}
 const childEnv = { ...process.env, CAPELLA_TRACE_FILE: traceFile, CAPELLA_DEV_ADD_FOLDER: libFolder };
 // E2E_ACCOUNTS connects and signs out a DUMMY key, and E2E_TOOLS adds MCP servers with secrets and starts new chats: they run in a throwaway home (like 1.x), never in your own opencode, whose own MCP servers would also make every start slow.
-if (V1 || process.env.E2E_ACCOUNTS || process.env.E2E_TOOLS) {
+if (V1 || process.env.E2E_ACCOUNTS || process.env.E2E_TOOLS || process.env.E2E_BROWSER) {
   const v1Home = join(work, "v1-home");
   Object.assign(childEnv, { HOME: v1Home, USERPROFILE: v1Home, XDG_CONFIG_HOME: join(v1Home, "c"), XDG_DATA_HOME: join(v1Home, "d"), XDG_STATE_HOME: join(v1Home, "s"), XDG_CACHE_HOME: join(v1Home, "k") });
   for (const name of Object.keys(childEnv)) if (/(_API_KEY|_TOKEN|_SECRET)$/i.test(name)) delete childEnv[name];
@@ -583,6 +591,101 @@ try {
     await clickDialog("Cancel");
     await evalWeb("(() => { d.getElementById('toolsClose').click(); return true; })()");
   };
+
+  // The browser: Playwright MCP is installed after the question, the agent opens a local page, clicks, and its screenshot shows in the chat.
+  const browserChecks = async () => {
+    const page = "<!doctype html><title>Capella e2e page</title><body style='font-family:sans-serif;background:#fffbe6'><h1 id='t'>Hello from the Capella e2e page</h1><button id='b' onclick=\"document.getElementById('t').textContent='Clicked by the agent!'\">Click me</button></body>";
+    const web = createServer((_req, res) => res.writeHead(200, { "content-type": "text/html" }).end(page));
+    await new Promise((r) => web.listen(0, "127.0.0.1", r));
+    const url = `http://127.0.0.1:${web.address().port}/`;
+    try {
+      await evalWeb("(() => { d.getElementById('toolsBtn').click(); return true; })()");
+      await waitFor("the Tools panel", () => evalWeb("!d.getElementById('tools').hidden && !!d.querySelector('#toolsBody .tools-section')"), 30000);
+      await sleep(1000);
+      await evalWeb("(() => { [...d.querySelectorAll('#toolsBody .btn')].find(b => /^Add the browser/.test(b.textContent)).click(); return true; })()");
+      await inputBox(); // which pages: only this computer (the first choice)
+      const question = await waitFor("the question", dialogText, 30000).catch(() => null);
+      console.log("browser question:", JSON.stringify(question));
+      check("adding the browser asks first and says it is third-party code, a throwaway profile and not a security boundary", !!question && /@playwright\/mcp 0\.0\.\d+/.test(question) && /third-party code/.test(question) && /throwaway profile/.test(question) && /not a security boundary/.test(question) && /asks you first/.test(question), String(question));
+      await shot("42-browser-question");
+      await clickDialog("Install and add");
+      const up = await waitFor("the browser server", () => evalWeb("(() => { const r = [...d.querySelectorAll('#toolsBody .session')].find(r => r.querySelector('.session-title').textContent === 'browser'); return r && r.querySelector('.badge').textContent === 'connected' ? r.querySelector('.session-meta').textContent : null; })()"), 240000).catch(() => null);
+      console.log("browser row:", JSON.stringify(up));
+      check("the browser server is installed, started and connected", !!up && /--isolated/.test(up) && /--allowed-origins/.test(up) && /--headless/.test(up), String(up));
+      await shot("43-browser-added");
+      await evalWeb("(() => { d.getElementById('toolsClose').click(); return true; })()");
+
+      // connect Go in this throwaway opencode through the real Accounts box
+      await evalWeb("(() => { d.getElementById('toolsBtn').click(); return true; })()");
+      await waitFor("the accounts", () => evalWeb("!!d.querySelector('#toolsBody .tools-section input[type=search]')"), 30000);
+      await sleep(800);
+      await evalWeb("(() => { const r = [...d.querySelectorAll('#toolsBody .session')].find(r => r.querySelector('.session-title').textContent === 'OpenCode Go'); [...r.querySelectorAll('.btn')].find(b => /API key/.test(b.textContent)).click(); return true; })()");
+      await inputBox(goKey);
+      check("Go is connected in the throwaway opencode", !!(await waitFor("Go connected", () => evalWeb("(() => { const r = [...d.querySelectorAll('#toolsBody .session')].find(r => r.querySelector('.session-title').textContent === 'OpenCode Go'); return r && r.querySelector('.badge').textContent === 'connected'; })()"), 30000).catch(() => false)));
+      await evalWeb("(() => { d.getElementById('toolsClose').click(); return true; })()");
+      // pick the model (the Go models are listed once opencode has read the catalog for the credential: look again until they are)
+      const pickModel = async () => {
+        await evalWeb("(() => { d.getElementById('modelBtn').click(); return true; })()");
+        await sleep(500);
+        await evalWeb(`(() => { const s = d.querySelector('#menu input'); if (!s) return false; s.value = ${JSON.stringify(modelTail)}; s.dispatchEvent(new Event('input')); return true; })()`);
+        await sleep(400);
+        const done = await evalWeb(`(() => { const it = [...d.querySelectorAll('#menu .item')].find(x => x.querySelector('small').textContent === ${JSON.stringify(modelRef)}); if (!it) { document.body.click(); return false; } it.click(); return true; })()`);
+        if (!done) await evalWeb("(() => { const m = d.getElementById('menu'); if (!m.hidden) d.getElementById('modelBtn').click(); return true; })()");
+        return done;
+      };
+      let pickedModel = false;
+      for (let i = 0; i < 24 && !pickedModel; i++) {
+        pickedModel = await pickModel();
+        if (!pickedModel) await sleep(4000);
+      }
+      check("the model can be picked", pickedModel);
+      await sleep(800);
+      const ask = (text) => evalWeb(`(() => { const i = d.getElementById('input'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new Event('input')); d.getElementById('send').click(); return true; })()`);
+      // Allow what the browser server asks (and reject anything else): the page is the test's own.
+      const answerApprovals = async (limitMs) => {
+        const end = Date.now() + limitMs;
+        const asked = [];
+        while (Date.now() < end) {
+          const card = await evalWeb("(() => { const c = [...d.querySelectorAll('.approval-card:not(.resolved)')].find(x => ![...x.querySelectorAll('button')].some(b => b.disabled)); return c ? c.querySelector('.what').textContent : null; })()");
+          if (card) {
+            const ok = /browser_/.test(card);
+            asked.push(card);
+            await evalWeb(`(() => { const c = [...d.querySelectorAll('.approval-card:not(.resolved)')].find(x => ![...x.querySelectorAll('button')].some(b => b.disabled)); [...c.querySelectorAll('button')].find(b => b.textContent === ${JSON.stringify(ok ? "Allow once" : "Reject")}).click(); return true; })()`);
+          }
+          if (await evalWeb("!d.getElementById('stop').offsetParent && !d.querySelector('.turn.live')")) return asked;
+          await sleep(700);
+        }
+        throw new Error("the browser turn did not end; approvals asked: " + JSON.stringify(asked));
+      };
+      await ask(`Use the browser MCP server: open ${url} , take a screenshot, click the Click me button, then tell me exactly what the heading says.`);
+      await sleep(3000);
+      const asked = await answerApprovals(240000);
+      console.log("approvals asked:", JSON.stringify(asked));
+      check("every browser action asked first", asked.length >= 3 && asked.every((a) => /browser_/.test(a)), JSON.stringify(asked));
+      const answer = await evalWeb("[...[...d.querySelectorAll('.turn')].pop().querySelectorAll('.md')].map(x => x.textContent).join(' ')");
+      console.log("browser answer:", JSON.stringify(answer));
+      check("the agent opened the page, clicked, and read the new heading", /Clicked by the agent/i.test(answer), answer);
+      const shots = await waitFor("the screenshot", () => evalWeb("(() => { const im = [...d.querySelectorAll('.tool-images img')].filter(i => i.naturalWidth > 0); return im.length ? im.length : null; })()"), 15000).catch(() => 0);
+      check("the screenshot the agent took is shown under its tool card", !!shots, String(shots));
+      await shot("44-browser-turn");
+
+      // an address outside this computer is refused by the browser
+      await ask("Now open https://example.com in the browser and tell me exactly what happened, quoting any error.");
+      await sleep(3000);
+      await answerApprovals(240000);
+      const outside = await evalWeb("[...[...d.querySelectorAll('.turn')].pop().querySelectorAll('.md')].map(x => x.textContent).join(' ')");
+      console.log("outside answer:", JSON.stringify(outside));
+      check("a site outside this computer does not load", /block|ERR_BLOCKED|refus|not (be )?(allowed|load)|fail|denied/i.test(outside), outside);
+    } finally {
+      web.close();
+    }
+  };
+
+  if (process.env.E2E_BROWSER) {
+    await browserChecks();
+    console.log(failed === 0 ? `[${label}] ALL CHECKS PASSED (browser)` : `[${label}] ${failed} CHECK(S) FAILED (browser)`);
+    throw Object.assign(new Error("browser run finished"), { v1Done: true });
+  }
 
   if (process.env.E2E_TOOLS) {
     await toolsChecks(true);

@@ -956,6 +956,11 @@ function paintTools(tools: ToolsView): void {
   add.type = "button";
   add.addEventListener("click", () => post({ type: "mcpAdd" }));
   mcp.append(add);
+  const browser = el("button", "btn", "Add the browser (Playwright)\u2026");
+  browser.type = "button";
+  browser.title = "Let the agent open a page, click and take screenshots: Microsoft's Playwright MCP, installed after a question, in a throwaway profile";
+  browser.addEventListener("click", () => post({ type: "mcpAddBrowser" }));
+  mcp.append(" ", browser);
 
   const skills = toolsSection(`Skills (${tools.skills.length})`, "Type / in the message box to use one.");
   for (const skill of tools.skills) {
@@ -1326,6 +1331,19 @@ window.addEventListener("message", (e: MessageEvent<ToWebview>) => {
     case "tools":
       paintTools(message.tools);
       break;
+    case "toolImages": {
+      const step = tools.get(message.callId);
+      if (!step) break;
+      const strip = el("div", "tool-images");
+      for (const uri of message.images) {
+        const img = el("img", "answer-pic");
+        img.src = uri;
+        img.alt = "Screenshot taken by the agent";
+        strip.append(img);
+      }
+      step.append(strip);
+      break;
+    }
     case "slash":
       slashEntries = message.entries;
       paintSlash();

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.7 (unreleased)
+
+- **The browser:** Tools → **Add the browser (Playwright)…** adds Microsoft's Playwright MCP so that the agent can open a page, click, type and take screenshots, which show under its tool card in the chat. A question says it is third-party code, asks which pages it may open (only this computer, or any website) and shows what will run; Capella installs `@playwright/mcp` 0.0.83 (pinned, install scripts off) into its own storage, and starts it headless in a throwaway profile on the installed Edge or Chrome (nothing is downloaded). Every action asks first. Checked in both editors with a real model: install, connection, approvals, a click on a local page, the screenshots, and an outside site refused.
+- The pictures a tool result names are shown only when the file exists inside the open project or Capella's own folder and its bytes are a real picture.
+- e2e: `E2E_BROWSER=1` (a throwaway opencode, with the Go key typed into the Accounts box and never printed).
+
 ## 0.1.6 (2026-11-02)
 
 - **MCP manager, complete:** servers added in Capella can be given environment variables or headers (values typed masked and kept only in the editor's secret storage, never shown again), **Edit**ed (command, address, working folder, variables, headers) and **Test**ed; a server that needs a login gets a **Sign in** button. The confirmation lists names, never values; a missing secret stops a server from starting half-configured. What was stored by 0.1.4 is read as before.

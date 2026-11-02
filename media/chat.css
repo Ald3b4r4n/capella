@@ -228,3 +228,5 @@ textarea { width: 100%; resize: none; border: 0; outline: 0; background: transpa
 .chips.folders { padding-bottom: 4px; }
 .tools-section input[type="search"] { width: 100%; box-sizing: border-box; margin: 2px 0 6px; background: var(--input-bg); color: inherit; border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; font: inherit; }
 .session-actions { flex-wrap: wrap; justify-content: flex-end; }
+.tool-images { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 2px 0; }
+.tool-images .answer-pic { max-height: 220px; margin: 0; }

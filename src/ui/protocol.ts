@@ -133,6 +133,8 @@ export type ToWebview =
   | { type: "delivered"; text: string; files?: Array<{ name: string; mime: string; thumb?: string }> }
   | { type: "slash"; entries: SlashEntryView[] }
   | { type: "tools"; tools: ToolsView }
+  /** Screenshots a tool result named (saved by the browser server in Capella's own folder), for the tool's card. */
+  | { type: "toolImages"; callId: string; images: string[] }
   /** Folders outside the project that this chat may use. */
   | { type: "folders"; items: Array<{ path: string; name: string }> }
   /** An image an answer pointed to, read by the extension (inside the open folder only). */
@@ -163,6 +165,7 @@ export type FromWebview =
   | { type: "listTools" }
   | { type: "mcpToggle"; name: string; on: boolean }
   | { type: "mcpAdd" }
+  | { type: "mcpAddBrowser" }
   | { type: "mcpRemove"; name: string }
   | { type: "mcpEdit"; name: string }
   | { type: "mcpTest"; name: string }

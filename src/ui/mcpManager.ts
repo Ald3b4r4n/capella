@@ -5,10 +5,14 @@
  * masked boxes and kept only in the editor's secret storage, the system keychain; they are read at the moment a server is
  * started, handed to opencode in memory and never shown, logged or sent to the page again.
  */
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import * as vscode from "vscode";
 import type { McpConfig, McpServerInfo } from "../opencode/backend.ts";
 import type { OpencodeSession } from "../opencode/session.ts";
+import { browserChannel, browserCommand, LOCAL_ORIGINS, PLAYWRIGHT_MCP_VERSION, type BrowserScope } from "./browserPreset.ts";
 import { parseCommandLine, validEnvName, validHeaderName, validMcpName, validMcpUrl, validSecretValue } from "./mcpInput.ts";
 import { readManaged, secretKey, summarize, toConfig, valid, type ManagedMcp } from "./mcpStore.ts";
 
@@ -110,6 +114,95 @@ export class McpManager {
     const what = entry.type === "local" ? "This program runs on your computer with your user's permissions, now and every time a chat opens in this project." : "The agent will send what it passes to this server's tools to that address.";
     const detail = `${summarize(entry, true)}${changed.length > 0 ? `\n\nNew values for: ${changed.join(", ")}` : ""}\n\n${what}\nIts tools are asked about before they run (except in Bypass mode). Remove it at any time in Tools.`;
     return (await vscode.window.showWarningMessage(title, { modal: true, detail }, action)) === action;
+  }
+
+  /** Where the browser server saves its screenshots: a folder Capella owns, outside the project. The chat shows pictures from here and nowhere else. */
+  browserOutDir(): string {
+    return join(this.context.globalStorageUri.fsPath, "browser-output");
+  }
+
+  private runNpm(cwd: string, args: string[]): Promise<{ code: number | null; output: string }> {
+    return new Promise((resolve) => {
+      // npm is a .cmd file on Windows, which needs a shell; every argument here is fixed by Capella, none comes from a user.
+      const child = spawn(process.platform === "win32" ? "npm.cmd" : "npm", args, { cwd, shell: process.platform === "win32", windowsHide: true });
+      let output = "";
+      const take = (c: Buffer) => (output = (output + String(c)).slice(-4000));
+      child.stdout.on("data", take);
+      child.stderr.on("data", take);
+      const timer = setTimeout(() => child.kill(), 180_000);
+      child.on("error", (error) => {
+        clearTimeout(timer);
+        resolve({ code: null, output: String(error) });
+      });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        resolve({ code, output });
+      });
+    });
+  }
+
+  /**
+   * "Add the browser": Microsoft's Playwright MCP server, so that the agent can open a page, click and take a screenshot.
+   * It is third-party code from npm, so it is installed at a pinned version with install scripts off, into this extension's
+   * own storage, after a question that says so, and it drives the user's installed Edge or Chrome in a throwaway profile.
+   * It is an ordinary MCP server afterwards: its tools are asked about like any other.
+   */
+  async addBrowser(session: OpencodeSession): Promise<boolean> {
+    const existing = new Set((await session.mcpList().catch(() => [] as McpServerInfo[])).map((s) => s.name));
+    const name = ["browser", "playwright", "browser2"].find((n) => !existing.has(n));
+    if (!name) {
+      this.notice("There are servers called browser, playwright and browser2 already.", true);
+      return false;
+    }
+    const channel = browserChannel(process.platform, existsSync);
+    if (!channel) {
+      this.notice("No Microsoft Edge or Google Chrome was found: Capella drives an installed browser and does not download one.", true);
+      return false;
+    }
+    const scope = await vscode.window.showQuickPick(
+      [
+        { label: "Only this computer", description: "localhost, 127.0.0.1", detail: "To look at the page you are building. The browser is asked to load only pages served from this computer.", scope: "local" as BrowserScope },
+        { label: "Any website", description: "", detail: "The agent can open any address, for research or to test something online.", scope: "web" as BrowserScope },
+      ],
+      { title: "Add the browser: which pages may it open?", placeHolder: "You can change this later with Edit." },
+    );
+    if (!scope) return false;
+    const browserName = channel === "msedge" ? "Microsoft Edge" : "Google Chrome";
+    const go = "Install and add";
+    const detail = [
+      `Capella will install @playwright/mcp ${PLAYWRIGHT_MCP_VERSION} (Microsoft's Playwright, Apache-2.0, about 19 MB) from npm into its own storage, with npm's install scripts turned off, and add it as the MCP server "${name}". This is third-party code that runs on your computer.`,
+      `It drives your installed ${browserName} (nothing is downloaded), headless, in a throwaway profile: no cookies, no logins, nothing kept.`,
+      scope.scope === "local" ? `Pages: only this computer (${LOCAL_ORIGINS.split(";").join(", ")}). That is a filter on the browser's requests, not a security boundary: a page can redirect.` : "Pages: any website.",
+      "Every action it takes (open a page, click, type, take a screenshot) asks you first, except in Bypass mode, and you decide whether to Always allow one. What a web page says is not an instruction, but a page can try to mislead the agent: read what it is about to do.",
+      "Screenshots are shown in the chat. Remove it at any time in Tools.",
+    ].join("\n\n");
+    if ((await vscode.window.showWarningMessage("Add the browser (Playwright)?", { modal: true, detail }, go)) !== go) return false;
+
+    const dir = join(this.context.globalStorageUri.fsPath, "playwright-mcp");
+    mkdirSync(dir, { recursive: true });
+    const cli = join(dir, "node_modules", "@playwright", "mcp", "cli.js");
+    const installed = (): boolean => {
+      try {
+        return existsSync(cli) && (JSON.parse(readFileSync(join(dir, "node_modules", "@playwright", "mcp", "package.json"), "utf8")) as { version?: string }).version === PLAYWRIGHT_MCP_VERSION;
+      } catch {
+        return false;
+      }
+    };
+    if (!installed()) {
+      const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Installing @playwright/mcp ${PLAYWRIGHT_MCP_VERSION}…` }, () =>
+        this.runNpm(dir, ["install", "--prefix", ".", "--ignore-scripts", "--no-audit", "--no-fund", `@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}`]),
+      );
+      if (result.code !== 0 || !installed()) {
+        this.log(`npm install of the browser server failed: ${result.output}`);
+        this.notice("The browser server could not be installed (is npm available and online?). See the Capella output for npm's message.", true);
+        return false;
+      }
+    }
+    mkdirSync(this.browserOutDir(), { recursive: true });
+    const entry: ManagedMcp = { name, type: "local", command: browserCommand(cli, channel, scope.scope, this.browserOutDir()), cwd: this.browserOutDir(), envNames: [], headerNames: [] };
+    if (!valid(entry) || !(await this.apply(session, entry, new Map()))) return false;
+    this.notice(`The browser was added as "${name}". It may take a few seconds to start.`);
+    return true;
   }
 
   /** Starts (or restarts, with a changed configuration) the server, then keeps the structure and the secrets. */
