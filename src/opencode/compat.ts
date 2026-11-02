@@ -33,6 +33,8 @@ export const CAPABILITIES: readonly Capability[] = [
   { id: "defaultModel", label: "Your default model", essential: false, routes: [r("GET", "/api/model/default")] },
   { id: "history", label: "Stored chats (list, continue, fork)", essential: false, routes: [r("GET", "/api/session"), r("GET", "/api/session/{sessionID}"), r("POST", "/api/session/{sessionID}/fork")] },
   { id: "usageLimits", label: "OpenCode Go usage and Console budgets", essential: false, routes: [r("GET", "/api/experimental/usage/limits")] },
+  { id: "queue", label: "Messages queued while the agent works", essential: false, routes: [r("GET", "/api/session/{sessionID}/inbox"), r("PATCH", "/api/session/{sessionID}/inbox/{inboxID}"), r("DELETE", "/api/session/{sessionID}/inbox/{inboxID}")] },
+  { id: "commands", label: "/ palette: commands, skills and compaction", essential: false, routes: [r("GET", "/api/command"), r("GET", "/api/skill"), r("POST", "/api/session/{sessionID}/command"), r("POST", "/api/session/{sessionID}/compact")] },
 ];
 
 export type Generation = "v2" | "v1" | "unknown";
@@ -51,6 +53,7 @@ export const CAPABILITIES_V1: readonly Capability[] = [
   { id: "modes", label: "Permission modes (rules)", essential: true, routes: [r("PATCH", "/session/{sessionID}")] },
   { id: "defaultModel", label: "Your default model", essential: false, routes: [r("GET", "/config")] },
   { id: "history", label: "Stored chats (list, continue, fork)", essential: false, routes: [r("GET", "/session"), r("GET", "/session/{sessionID}"), r("POST", "/session/{sessionID}/fork")] },
+  { id: "commands", label: "/ palette: commands, skills and compaction", essential: false, routes: [r("GET", "/command"), r("POST", "/session/{sessionID}/command"), r("POST", "/session/{sessionID}/summarize")] },
 ];
 
 const METHODS = new Set(["get", "post", "put", "patch", "delete"]);

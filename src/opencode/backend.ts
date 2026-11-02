@@ -22,6 +22,24 @@ export interface PromptFile {
   mime?: string;
 }
 
+/** How a message sent while the agent is working reaches it: after the current work (`queue`) or into it at its next step (`steer`). */
+export type Delivery = "queue" | "steer";
+
+export interface PromptOptions {
+  delivery?: Delivery;
+  /** Skills the user picked from the palette (2.x ids), invoked with this message. */
+  skillIds?: string[];
+}
+
+/** One row of the `/` palette. */
+export interface SlashEntry {
+  kind: "command" | "skill";
+  name: string;
+  description?: string;
+  /** 2.x: the id a prompt names to invoke the skill. */
+  id?: string;
+}
+
 export interface PendingApproval {
   id: string;
   sessionId: string;
@@ -47,7 +65,20 @@ export interface Backend {
   selectModel(sessionId: string, model: ModelRef, effort?: string): Promise<void>;
   /** Replaces the permission rules (and agent) of a session with the mode's. */
   applyMode(sessionId: string, mode: ModeId, web?: WebPolicy): Promise<void>;
-  prompt(sessionId: string, text: string, files: readonly PromptFile[]): Promise<void>;
+  /** Whether a message can be sent while a turn runs (2.x queues and steers; 1.x has no such delivery). */
+  readonly canQueue: boolean;
+  /** Returns the id the server gave the message (the queue entry), when it gives one. */
+  prompt(sessionId: string, text: string, files: readonly PromptFile[], options?: PromptOptions): Promise<string | undefined>;
+  /** Inbox ids of the user messages still waiting for their turn. */
+  queued(sessionId: string): Promise<string[]>;
+  dequeue(sessionId: string, inboxId: string): Promise<void>;
+  steer(sessionId: string, inboxId: string): Promise<void>;
+  /** The commands and skills for the `/` palette. */
+  slash(): Promise<SlashEntry[]>;
+  /** Runs a server command in the session. Resolves when the server has accepted it (1.x answers only when it is done, so that is not awaited). */
+  runCommand(sessionId: string, name: string, args: string, files: readonly PromptFile[]): Promise<void>;
+  /** Asks the server to summarise the conversation to free context. */
+  compact(sessionId: string): Promise<void>;
   interrupt(sessionId: string): Promise<void>;
   reply(sessionId: string, requestId: string, decision: "once" | "always" | "reject", message?: string): Promise<void>;
   pending(): Promise<PendingApproval[]>;

@@ -89,6 +89,7 @@ const server = createServer(async (req, res) => {
       default: { opencode: "m1" },
     });
   if (req.method === "GET" && path === "/config") return json(res, 200, { username: "x" });
+  if (req.method === "GET" && path === "/command") return json(res, 200, [{ name: "review", description: "Review the changes", template: "", hints: [] }, { name: "pdf", description: "Work with PDFs", source: "skill", template: "", hints: [] }]);
   if (req.method === "GET" && path === "/permission") return json(res, 200, [...pending.values()].map(({ resolve, reply, ...row }) => row));
   if (req.method === "GET" && path === "/session")
     return json(res, 200, [
@@ -122,6 +123,7 @@ const server = createServer(async (req, res) => {
     return;
   }
   if (req.method === "POST" && /\/abort$/.test(path)) return json(res, 200, true);
+  if (req.method === "POST" && /^\/session\/ses_\w+\/(command|summarize)$/.test(path)) return json(res, 200, true);
   const reply = /^\/session\/ses_\w+\/permissions\/(per_\w+)$/.exec(path);
   if (req.method === "POST" && reply) {
     const request = pending.get(reply[1]);

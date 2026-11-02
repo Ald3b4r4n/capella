@@ -88,6 +88,33 @@ export async function insideRoots(path: string, roots: readonly string[]): Promi
   return false;
 }
 
+/**
+ * An image an answer points to (`![alt](path)`), as a `data:` URI for the page. Only a picture on disk inside the open
+ * folder(s): the bytes must really be PNG, JPEG, GIF or WebP (a name is never trusted) and at most MAX_IMAGE_BYTES. A web
+ * address is never fetched: that would let an answer make the editor contact a server of the model's choosing.
+ */
+export async function loadAnswerImage(src: string, roots: readonly string[]): Promise<{ ok: true; uri: string } | { ok: false; reason: string }> {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(src) && !/^[a-z]:[\\/]/i.test(src)) return { ok: false, reason: "Only pictures from the open folder are shown." };
+  const root = roots[0];
+  if (!root) return { ok: false, reason: "No folder is open." };
+  const absolute = resolve(root, src);
+  const shown = basename(absolute);
+  try {
+    await stat(absolute);
+  } catch {
+    return { ok: false, reason: `${shown} was not found.` };
+  }
+  if (!(await insideRoots(absolute, roots))) return { ok: false, reason: `${shown} is outside the open folder.` };
+  const loaded = await loadFile(absolute, roots);
+  if (!loaded.ok) return { ok: false, reason: loaded.reason };
+  if (loaded.attachment.kind !== "image") return { ok: false, reason: `${loaded.attachment.name} is not a picture Capella can show.` };
+  try {
+    return { ok: true, uri: dataUri(loaded.attachment.mime, await readFile(absolute)) };
+  } catch {
+    return { ok: false, reason: `${loaded.attachment.name} could not be read.` };
+  }
+}
+
 export function dataUri(mime: string, buf: Uint8Array): string {
   return `data:${mime};base64,${Buffer.from(buf).toString("base64")}`;
 }

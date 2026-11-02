@@ -1,5 +1,5 @@
 import type { SessionEvent } from "../opencode/session.ts";
-import type { AttachmentView, ChangeRowView, FileChangeView, FromWebview, ModeRow, ModelRow, SessionRowView, ToWebview, UsageView } from "../ui/protocol.ts";
+import type { AttachmentView, ChangeRowView, FileChangeView, FromWebview, ModeRow, ModelRow, QueueItemView, SessionRowView, SlashEntryView, ToWebview, UsageView } from "../ui/protocol.ts";
 import type { ReplayItem } from "../opencode/history.ts";
 import { findLocalUrl } from "../ui/preview.ts";
 import { renderMarkdown } from "./markdown.ts";
@@ -24,6 +24,11 @@ const micBtn = $<HTMLButtonElement>("micBtn");
 const effortBtn = $<HTMLButtonElement>("effortBtn");
 const webBtn = $<HTMLButtonElement>("webBtn");
 const voiceStatus = $<HTMLElement>("voiceStatus");
+const slashMenu = $<HTMLElement>("slashMenu");
+const queueTray = $<HTMLElement>("queueTray");
+const todosEl = $<HTMLDetailsElement>("todos");
+const todosSummary = $<HTMLElement>("todosSummary");
+const todosList = $<HTMLElement>("todosList");
 
 let modes: ModeRow[] = [];
 let models: ModelRow[] = [];
@@ -33,6 +38,9 @@ let effort: string | undefined;
 let web: "mode" | "allow" | "deny" = "mode";
 let busy = false;
 let attachments: AttachmentView[] = [];
+/** Whether this opencode takes a message while a turn runs (2.x; 1.x does not). */
+let canQueue = false;
+let queueItems: QueueItemView[] = [];
 
 // The current turn: the rail that every step of the reply hangs off, and the blocks still receiving text.
 let turn: HTMLElement | undefined;
@@ -108,9 +116,11 @@ function say(text: string, error = false): void {
 
 function setBusy(value: boolean): void {
   busy = value;
-  sendBtn.hidden = value;
+  // While the agent works, Send stays when the message can be queued; Stop is always there.
+  sendBtn.hidden = value && !canQueue;
+  sendBtn.title = value ? "Queue this message (Ctrl+Enter sends it into the current turn)" : "Send";
   stopBtn.hidden = !value;
-  input.placeholder = value ? "opencode is working…" : "Ask opencode…  (Enter sends, Shift+Enter adds a line)";
+  input.placeholder = value ? (canQueue ? "opencode is working… Enter queues your message, Ctrl+Enter sends it into the turn" : "opencode is working…") : "Ask opencode…  (Enter sends, Shift+Enter adds a line, / for commands)";
   turn?.classList.toggle("live", value);
 }
 
@@ -174,8 +184,10 @@ function addStep(kind: string): HTMLElement {
 function paintBlock(key: string): void {
   const block = blocks.get(key);
   if (!block) return;
-  if (block.kind === "text") block.el.innerHTML = renderMarkdown(block.raw);
-  else block.el.textContent = block.raw;
+  if (block.kind === "text") {
+    block.el.innerHTML = renderMarkdown(block.raw);
+    hydrateImages(block.el);
+  } else block.el.textContent = block.raw;
 }
 
 function queuePaint(key: string): void {
@@ -368,9 +380,14 @@ function onEvent(event: SessionEvent): void {
         break;
       }
       case "tool-started":
+        if (/todo/i.test(event.name)) todoCalls.add(event.callId);
         toolStep(event.callId, event.name);
         break;
+      case "tool-input":
+        if (todoCalls.has(event.callId)) paintTodos(event.input);
+        break;
       case "tool-called": {
+        if (todoCalls.has(event.callId)) paintTodos(event.input);
         const step = toolStep(event.callId);
         const arg = step.querySelector(".arg");
         if (arg) arg.textContent = toolArg(step.dataset.tool ?? "", event.input);
@@ -511,6 +528,7 @@ function replay(items: ReplayItem[]): void {
         block.raw = part.text;
         paintBlock(`${part.kind}:${id}:${index}`);
       } else {
+        if (/todo/i.test(part.name)) paintTodos(part.input);
         const step = toolStep(`${id}:${part.callId}`, part.name);
         const arg = step.querySelector(".arg");
         if (arg) arg.textContent = toolArg(part.name, part.input);
@@ -740,13 +758,162 @@ function modelMenu(): void {
 
 // ---- composer ---------------------------------------------------------------------------------------------------
 
-function send(): void {
+function send(delivery?: "queue" | "steer"): void {
   const text = input.value.trim();
-  if ((text === "" && attachments.length === 0) || busy) return;
+  if (text === "" && attachments.length === 0) return;
+  if (busy && !canQueue) {
+    say("Wait for opencode to finish this turn: this version (1.x) cannot take a message while it works.", true);
+    return;
+  }
   input.value = "";
   grow();
   say("");
-  post({ type: "send", text });
+  closeSlash();
+  post(busy ? { type: "send", text, delivery: delivery ?? "queue" } : { type: "send", text });
+}
+
+// ---- messages waiting for their turn (opencode 2.x) ----------------------------------------------------------------
+
+function paintQueue(): void {
+  queueTray.replaceChildren();
+  queueTray.hidden = queueItems.length === 0;
+  for (const item of queueItems) {
+    const row = el("div", "q-row");
+    const label = item.text.length > 140 ? item.text.slice(0, 140) + "…" : item.text;
+    row.append(el("span", "q-kind", item.delivery === "steer" ? "steering" : "queued"), el("span", "q-text", label));
+    if (item.files.length > 0) row.append(el("span", "q-files faint", item.files.join(", ")));
+    if (item.delivery === "queue") {
+      const now = el("button", "btn small", "Send now");
+      now.type = "button";
+      now.title = "Hand it to the agent at its next step, without waiting for the end of the turn";
+      now.addEventListener("click", () => post({ type: "steerNow", id: item.id }));
+      row.append(now);
+    }
+    const remove = el("button", "x", "\u00d7");
+    remove.type = "button";
+    remove.title = "Remove this message from the queue";
+    remove.setAttribute("aria-label", "Remove this message from the queue");
+    remove.addEventListener("click", () => post({ type: "unqueue", id: item.id }));
+    row.append(remove);
+    queueTray.append(row);
+  }
+}
+
+/** A queued message has just joined the turn: the turn so far is closed off and the message opens the next part. */
+function joinMessage(text: string, files: Array<{ name: string; mime: string; thumb?: string }> | undefined): void {
+  if (turn) {
+    turn.classList.remove("live");
+    addCopyAnswer(turn);
+    turn = undefined;
+    blocks.clear();
+  }
+  timeline.append(userBubble(text, files));
+  following = true;
+  scrollToEnd();
+}
+
+// ---- the / palette ------------------------------------------------------------------------------------------------
+
+let slashEntries: SlashEntryView[] | undefined;
+let slashAsked = false;
+let slashShown: SlashEntryView[] = [];
+let slashIndex = 0;
+
+function closeSlash(): void {
+  slashMenu.hidden = true;
+  slashShown = [];
+}
+
+function pickSlash(entry: SlashEntryView): void {
+  input.value = "/" + entry.name + " ";
+  closeSlash();
+  input.focus();
+  grow();
+}
+
+function paintSlash(): void {
+  const value = input.value;
+  if (!value.startsWith("/") || /\s/.test(value)) {
+    closeSlash();
+    return;
+  }
+  const query = value.slice(1).toLowerCase();
+  if (!slashEntries) {
+    if (!slashAsked) {
+      slashAsked = true;
+      post({ type: "listSlash" });
+    }
+    return;
+  }
+  // What matches the start of the word first; then Capella's own, the server's commands, the skills.
+  const kindOrder = { builtin: 0, command: 1, skill: 2 } as const;
+  const rank = (e: SlashEntryView): number => (query !== "" && e.name.toLowerCase().startsWith(query) ? 0 : 3) + kindOrder[e.kind] * 0.1;
+  slashShown = slashEntries.filter((e) => e.name.toLowerCase().includes(query)).sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name)).slice(0, 40);
+  slashIndex = Math.min(slashIndex, Math.max(0, slashShown.length - 1));
+  slashMenu.replaceChildren();
+  slashMenu.hidden = slashShown.length === 0;
+  slashShown.forEach((entry, i) => {
+    const row = el("button", `slash-row${i === slashIndex ? " on" : ""}`);
+    row.type = "button";
+    row.setAttribute("role", "option");
+    row.append(el("span", "slash-name", "/" + entry.name), el("span", `slash-kind ${entry.kind}`, entry.kind), el("span", "slash-desc faint", entry.description ?? ""));
+    row.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      pickSlash(entry);
+    });
+    slashMenu.append(row);
+  });
+  slashMenu.querySelector(".on")?.scrollIntoView({ block: "nearest" });
+}
+
+// ---- the task list the agent keeps ---------------------------------------------------------------------------------
+
+const todoCalls = new Set<string>();
+
+function paintTodos(raw: unknown): void {
+  const list = typeof raw === "object" && raw !== null ? (raw as { todos?: unknown }).todos : undefined;
+  if (!Array.isArray(list)) return;
+  const rows = list.flatMap((t): Array<{ text: string; status: string }> => {
+    if (typeof t !== "object" || t === null) return [];
+    const row = t as { content?: unknown; text?: unknown; status?: unknown };
+    const text = typeof row.content === "string" ? row.content : typeof row.text === "string" ? row.text : "";
+    return text === "" ? [] : [{ text, status: typeof row.status === "string" ? row.status : "pending" }];
+  });
+  todosList.replaceChildren();
+  todosEl.hidden = rows.length === 0;
+  const done = rows.filter((r) => r.status === "completed").length;
+  const doing = rows.find((r) => r.status === "in_progress");
+  todosSummary.textContent = `Tasks ${done}/${rows.length}${doing ? " · " + doing.text : ""}`;
+  for (const row of rows) {
+    const glyph = row.status === "completed" ? "\u2611" : row.status === "in_progress" ? "\u25d0" : row.status === "cancelled" ? "\u2612" : "\u2610";
+    const li = el("li", `todo ${row.status}`);
+    li.append(el("span", "glyph", glyph), el("span", undefined, row.text));
+    todosList.append(li);
+  }
+}
+
+// ---- pictures an answer points to ----------------------------------------------------------------------------------
+
+const imageCache = new Map<string, string | { error: string }>();
+const imageAsked = new Set<string>();
+
+function hydrateImages(root: ParentNode): void {
+  for (const span of root.querySelectorAll<HTMLElement>("span.answer-img")) {
+    const src = span.dataset.src ?? "";
+    const known = imageCache.get(src);
+    if (typeof known === "string") {
+      const img = el("img", "answer-pic");
+      img.src = known;
+      img.alt = span.title || src;
+      span.replaceWith(img);
+    } else if (known) {
+      span.classList.add("failed");
+      span.textContent = `[picture not shown: ${known.error}]`;
+    } else if (!imageAsked.has(src)) {
+      imageAsked.add(src);
+      post({ type: "loadImage", src });
+    }
+  }
 }
 
 function grow(): void {
@@ -882,9 +1049,27 @@ document.addEventListener("drop", (e) => {
 
 input.addEventListener("input", grow);
 input.addEventListener("keydown", (e) => {
+  if (!slashMenu.hidden && slashShown.length > 0 && !e.isComposing) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      slashIndex = (slashIndex + (e.key === "ArrowDown" ? 1 : slashShown.length - 1)) % slashShown.length;
+      paintSlash();
+      return;
+    }
+    if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      pickSlash(slashShown[slashIndex]!);
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeSlash();
+      return;
+    }
+  }
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
-    send();
+    send(e.ctrlKey || e.metaKey ? "steer" : undefined);
   } else if (e.key === "Tab" && e.shiftKey) {
     e.preventDefault();
     const cycle = modes.filter((m) => !m.dangerous);
@@ -892,7 +1077,8 @@ input.addEventListener("keydown", (e) => {
     if (next) post({ type: "setMode", id: next.id });
   }
 });
-sendBtn.addEventListener("click", send);
+sendBtn.addEventListener("click", () => send());
+input.addEventListener("input", paintSlash);
 stopBtn.addEventListener("click", () => post({ type: "stop" }));
 $<HTMLButtonElement>("newChat").addEventListener("click", () => post({ type: "newChat" }));
 modeBtn.addEventListener("click", modeMenu);
@@ -943,6 +1129,24 @@ window.addEventListener("message", (e: MessageEvent<ToWebview>) => {
     case "attachments":
       attachments = message.items;
       paintAttachments();
+      break;
+    case "queue":
+      canQueue = message.canQueue;
+      queueItems = message.items;
+      paintQueue();
+      setBusy(busy);
+      break;
+    case "delivered":
+      joinMessage(message.text, message.files);
+      break;
+    case "slash":
+      slashEntries = message.entries;
+      paintSlash();
+      break;
+    case "image":
+      imageAsked.delete(message.src);
+      imageCache.set(message.src, message.uri ?? { error: message.error ?? "could not be read" });
+      hydrateImages(timeline);
       break;
     case "busy":
       setBusy(message.value);
@@ -996,6 +1200,14 @@ window.addEventListener("message", (e: MessageEvent<ToWebview>) => {
     case "reset":
       effort = undefined;
       web = "mode";
+      queueItems = [];
+      paintQueue();
+      slashEntries = undefined;
+      slashAsked = false;
+      closeSlash();
+      todoCalls.clear();
+      todosEl.hidden = true;
+      todosList.replaceChildren();
       paintChips();
       timeline.replaceChildren();
       blocks.clear();

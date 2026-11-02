@@ -49,3 +49,15 @@ test("headings, lists and paragraphs", () => {
   assert.ok(html.includes("<ol><li>one</li><li>two</li></ol>"));
   assert.ok(html.includes("<p>last line</p>"));
 });
+
+test("a picture in an answer becomes a placeholder the extension can fill; a web picture stays a plain link and never loads", async () => {
+  const { renderMarkdown } = await import("../../src/webview/markdown.ts");
+  const local = renderMarkdown("Here: ![the chart](out/chart.png)");
+  assert.match(local, /<span class="answer-img" data-src="out\/chart.png" title="the chart">the chart<\/span>/);
+  const remote = renderMarkdown("![tracker](https://evil.example/p.png)");
+  assert.equal(remote.includes("<img"), false);
+  assert.match(remote, /data-href="https:\/\/evil.example\/p.png"/);
+  // markup in the alt text or path cannot break out of the attribute
+  const hostile = renderMarkdown('![x" onerror="y](a.png)');
+  assert.equal(/onerror="/.test(hostile), false);
+});

@@ -105,3 +105,26 @@ test("sizes read well", () => {
   assert.equal(describeSize(2048), "2 KB");
   assert.equal(describeSize(3.5 * 1024 * 1024), "3.5 MB");
 });
+
+test("a picture an answer points to is read only from the open folder, by its real bytes, and a web address is never fetched", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { loadAnswerImage } = await import("../../src/ui/attachments.ts");
+  const base = mkdtempSync(join(tmpdir(), "capella-ans-"));
+  const root = join(base, "ws");
+  mkdirSync(root);
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32)]);
+  writeFileSync(join(root, "ok.png"), png);
+  writeFileSync(join(root, "fake.png"), "this is not a picture");
+  writeFileSync(join(base, "outside.png"), png);
+  const ok = await loadAnswerImage("ok.png", [root]);
+  assert.equal(ok.ok && ok.uri.startsWith("data:image/png;base64,"), true);
+  assert.equal((await loadAnswerImage("fake.png", [root])).ok, false);
+  assert.equal((await loadAnswerImage("../outside.png", [root])).ok, false);
+  assert.equal((await loadAnswerImage(join(base, "outside.png"), [root])).ok, false);
+  assert.equal((await loadAnswerImage("https://example.com/a.png", [root])).ok, false);
+  assert.equal((await loadAnswerImage("file:///etc/passwd", [root])).ok, false);
+  assert.equal((await loadAnswerImage("data:image/png;base64,AAAA", [root])).ok, false);
+  assert.equal((await loadAnswerImage("ok.png", [])).ok, false);
+});

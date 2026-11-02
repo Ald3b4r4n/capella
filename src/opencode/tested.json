@@ -1,6 +1,8 @@
 {
   "version": "2.2.5",
   "usedRoutes": [
+    "DELETE /api/session/{sessionID}/inbox/{inboxID}",
+    "GET /api/command",
     "GET /api/event",
     "GET /api/experimental/usage/limits",
     "GET /api/info",
@@ -9,15 +11,20 @@
     "GET /api/permission/request",
     "GET /api/session",
     "GET /api/session/{sessionID}",
+    "GET /api/session/{sessionID}/inbox",
     "GET /api/session/{sessionID}/message",
+    "GET /api/skill",
     "PATCH /api/session/{sessionID}",
+    "PATCH /api/session/{sessionID}/inbox/{inboxID}",
     "POST /api/session",
     "POST /api/session/{sessionID}/agent",
+    "POST /api/session/{sessionID}/command",
+    "POST /api/session/{sessionID}/compact",
     "POST /api/session/{sessionID}/fork",
     "POST /api/session/{sessionID}/interrupt",
     "POST /api/session/{sessionID}/model",
     "POST /api/session/{sessionID}/permission/{requestID}/reply",
     "POST /api/session/{sessionID}/prompt"
   ],
-  "fingerprint": "b4a1cfb9bfcc"
+  "fingerprint": "8a242228e281"
 }

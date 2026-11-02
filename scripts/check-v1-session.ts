@@ -46,6 +46,8 @@ try {
   check("compatibility is OK for the tested 1.x", session.compat?.status === "ok" || session.compat?.status === "newer", session.compat?.status);
   check("the catalog has the chosen model (free when it is a Zen one) and no secret", session.models.some((m) => `${m.providerId}/${m.modelId}` === model && (m.free || !model.startsWith("opencode/"))) && !JSON.stringify(session.models).includes("public"), session.models.length);
   check("usage is absent on 1.x", (await session.usage()) === undefined);
+  const palette = await session.slash();
+  check("the / palette lists the 1.x commands", palette.length > 0 && palette.every((r) => r.name !== "" && (r.kind === "command" || r.kind === "skill")) && session.canQueue === false, palette.slice(0, 4).map((r) => `${r.kind}:${r.name}`));
 
   await session.send("Read hello.txt and tell me the secret word, in one short sentence.");
   check("the first turn ended", await until("turn-ended", 1));

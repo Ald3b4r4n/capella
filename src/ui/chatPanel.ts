@@ -6,7 +6,7 @@ import type { OriginalProvider } from "./originalProvider.ts";
 import { buildReport } from "../opencode/diagnostics.ts";
 import { featureFlags } from "../opencode/compat.ts";
 import { describeFree, emptyFreeUsage, recordLimitHit, recordStep, viewFor, type FreeUsageState } from "../opencode/freeUsage.ts";
-import { MAX_ATTACHMENTS, decodeBase64, describeSize, fromBytes, fromSelection, loadFile, type Attachment, type Loaded } from "./attachments.ts";
+import { MAX_ATTACHMENTS, loadAnswerImage, decodeBase64, describeSize, fromBytes, fromSelection, loadFile, type Attachment, type Loaded } from "./attachments.ts";
 import { describeAge } from "../opencode/history.ts";
 import { locateOpencode } from "../opencode/locate.ts";
 import { localPreviewUrl } from "./preview.ts";
@@ -14,7 +14,8 @@ import { extractLocalUrls, isPreviewableUrl, startPreviewServer, type PreviewSer
 import { MODES, DEFAULT_MODE, modeById, type ModeId } from "../opencode/modes.ts";
 import { OpencodeSession, type SessionEvent } from "../opencode/session.ts";
 import { chatHtml } from "./chatHtml.ts";
-import type { AttachmentView, FromWebview, ModeRow, ModelRow, ToWebview } from "./protocol.ts";
+import type { AttachmentView, FromWebview, ModeRow, ModelRow, QueueItemView, SlashEntryView, ToWebview } from "./protocol.ts";
+import type { Delivery, SlashEntry } from "../opencode/backend.ts";
 import type { UpdateMonitor } from "./updateMonitor.ts";
 import { VoiceBridge } from "./voiceBridge.ts";
 import type { UsageTracker } from "./usageTracker.ts";
@@ -54,6 +55,12 @@ export class ChatPanel {
   private changeQueue: Promise<void> = Promise.resolve();
   /** Waiting to go with the next message. Their content lives here; the page only gets names and thumbnails. */
   private attachments: Attachment[] = [];
+  /** Messages sent while the agent worked, keyed by the id the server gave them, until their turn comes. */
+  private queue: Array<{ id: string; text: string; files: Attachment[]; delivery: Delivery }> = [];
+  /** Ids delivered while their `send` call had not returned yet. */
+  private deliveredEarly = new Set<string>();
+  private queueSending = 0;
+  private slashCache?: { at: number; entries: SlashEntry[] };
   private readonly disposables: vscode.Disposable[] = [];
 
   static get(): ChatPanel | undefined {
@@ -146,6 +153,11 @@ export class ChatPanel {
       if (event.type === "turn-started") this.busy = true;
       if (event.type === "turn-ended" || event.type === "server-exit") this.busy = false;
       if (event.type === "catalog") return this.onCatalog(event, session);
+      if (event.type === "inbox-delivered") {
+        this.onDelivered(event.inboxId);
+        return;
+      }
+      if (event.type === "turn-ended") void this.reconcileQueue(session);
       this.post({ type: "event", event });
       this.countFreeUsage(event, session);
       if (event.type !== "resync" && event.type !== "server-exit") this.trackChanges(event);
@@ -179,6 +191,116 @@ export class ChatPanel {
     clearInterval(this.usageTimer);
     this.usageTimer = setInterval(() => void this.tracker.refresh(session), USAGE_POLL_MS);
     return session;
+  }
+
+  private postQueue(): void {
+    const items: QueueItemView[] = this.queue.map((q) => ({ id: q.id, text: q.text, files: q.files.map((f) => f.name), delivery: q.delivery }));
+    this.post({ type: "queue", items, canQueue: this.session?.canQueue ?? false });
+  }
+
+  private viewOfFiles(files: readonly Attachment[]): Array<{ name: string; mime: string; thumb?: string }> {
+    return files.map((a) => ({ name: a.name, mime: a.mime, thumb: a.thumb }));
+  }
+
+  /** A queued message was taken into the turn: it leaves the tray and joins the conversation. */
+  private onDelivered(inboxId: string): void {
+    const at = this.queue.findIndex((q) => q.id === inboxId);
+    if (at < 0) {
+      if (this.queueSending > 0) this.deliveredEarly.add(inboxId);
+      return;
+    }
+    const [item] = this.queue.splice(at, 1);
+    if (!item) return;
+    this.post({ type: "delivered", text: item.text, files: this.viewOfFiles(item.files) });
+    this.postQueue();
+  }
+
+  /** After a turn: whatever the server no longer holds is dropped from the tray. */
+  private async reconcileQueue(session: OpencodeSession): Promise<void> {
+    if (this.queue.length === 0) return;
+    const held = await session.queued().catch(() => undefined);
+    if (!held) return;
+    const before = this.queue.length;
+    this.queue = this.queue.filter((q) => held.includes(q.id));
+    if (this.queue.length !== before) this.postQueue();
+  }
+
+  private async queueMessage(session: OpencodeSession, text: string, delivery: Delivery): Promise<void> {
+    if (!session.canQueue) {
+      this.notice("This opencode (1.x) cannot take a message while it works. Wait for the turn to finish.", true);
+      return;
+    }
+    const sending = this.attachments;
+    this.attachments = [];
+    this.postAttachments();
+    const shown = text.trim() === "" && sending.length > 0 ? "Please look at the attached file(s)." : text;
+    this.queueSending++;
+    try {
+      const id = await session.send(shown, sending, { delivery });
+      if (!id) {
+        // The server did not name the message, so it cannot be tracked: show it as sent.
+        this.post({ type: "delivered", text: shown, files: this.viewOfFiles(sending) });
+        return;
+      }
+      if (this.deliveredEarly.delete(id)) {
+        this.post({ type: "delivered", text: shown, files: this.viewOfFiles(sending) });
+        return;
+      }
+      this.queue.push({ id, text: shown, files: sending, delivery });
+      this.postQueue();
+    } catch (error) {
+      this.attachments = sending;
+      this.postAttachments();
+      this.notice(`Could not queue the message: ${error instanceof Error ? error.message : String(error)}`, true);
+    } finally {
+      if (--this.queueSending === 0) this.deliveredEarly.clear();
+    }
+  }
+
+  private async slashEntries(session: OpencodeSession): Promise<SlashEntry[]> {
+    if (this.slashCache && Date.now() - this.slashCache.at < 60_000) return this.slashCache.entries;
+    const entries = await session.slash();
+    this.slashCache = { at: Date.now(), entries };
+    return entries;
+  }
+
+  /**
+   * `/name args` is a command when the name is one of Capella's own, or one the server lists as a command or skill; any
+   * other text starting with a slash (a path, say) is an ordinary message.
+   */
+  private async resolveSlash(session: OpencodeSession, text: string): Promise<{ builtin: "new" | "compact" } | { entry: SlashEntry; args: string } | undefined> {
+    const match = /^\/([^\s/]+)(?:\s+([\s\S]*))?$/.exec(text.trim());
+    if (!match) return undefined;
+    const name = match[1]!.toLowerCase();
+    if (name === "new" || name === "compact") return { builtin: name };
+    const entry = (await this.slashEntries(session)).find((e) => e.name.toLowerCase() === name);
+    return entry ? { entry, args: (match[2] ?? "").trim() } : undefined;
+  }
+
+  private async runSlash(session: OpencodeSession, text: string, found: NonNullable<Awaited<ReturnType<ChatPanel["resolveSlash"]>>>): Promise<void> {
+    if ("builtin" in found) {
+      if (found.builtin === "new") await this.newChat();
+      else {
+        this.notice("Asking opencode to summarise this conversation…");
+        await session.compact();
+      }
+      return;
+    }
+    const sending = this.attachments;
+    this.attachments = [];
+    this.postAttachments();
+    this.post({ type: "user", text: text.trim(), files: this.viewOfFiles(sending) });
+    this.busy = true;
+    this.post({ type: "busy", value: true });
+    try {
+      const { entry, args } = found;
+      if (entry.kind === "skill" && entry.id) await session.send(args !== "" ? args : `Use the ${entry.name} skill.`, sending, { skillIds: [entry.id] });
+      else await session.runCommand(entry.name, args, sending);
+    } catch (error) {
+      this.busy = false;
+      this.post({ type: "busy", value: false });
+      this.notice(error instanceof Error ? error.message : String(error), true);
+    }
   }
 
   private isFree(session: OpencodeSession): boolean {
@@ -456,6 +578,7 @@ export class ChatPanel {
     this.post({ type: "init", version: session.version, workspace: vscode.workspace.workspaceFolders?.[0]?.name ?? "", modes: this.modeRows(), mode: this.mode, models: this.modelRows(session), model: this.model, features: { history: featureFlags(session.compat).history } });
     this.post({ type: "usage", usage: this.tracker.view() });
     this.postModelNote(session);
+    this.postQueue();
   }
 
   private async onMessage(message: FromWebview): Promise<void> {
@@ -464,10 +587,51 @@ export class ChatPanel {
         case "ready":
           await this.sendInit();
           break;
+        case "loadImage": {
+          const roots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+          const result = await loadAnswerImage(message.src, roots);
+          this.post(result.ok ? { type: "image", src: message.src, uri: result.uri } : { type: "image", src: message.src, error: result.reason });
+          break;
+        }
+        case "listSlash": {
+          const session = await this.ensureSession();
+          if (!session) break;
+          const entries: SlashEntryView[] = [
+            { kind: "builtin", name: "new", description: "Start a new chat" },
+            { kind: "builtin", name: "compact", description: "Summarise the conversation to free up context" },
+            ...(await this.slashEntries(session)).map((e): SlashEntryView => ({ kind: e.kind, name: e.name, description: e.description })),
+          ];
+          this.post({ type: "slash", entries });
+          break;
+        }
+        case "unqueue": {
+          const item = this.queue.find((q) => q.id === message.id);
+          if (!item || !this.session) break;
+          await this.session.dequeue(item.id);
+          this.queue = this.queue.filter((q) => q !== item);
+          this.postQueue();
+          break;
+        }
+        case "steerNow": {
+          const item = this.queue.find((q) => q.id === message.id);
+          if (!item || !this.session) break;
+          await this.session.steer(item.id);
+          item.delivery = "steer";
+          this.postQueue();
+          break;
+        }
         case "send": {
-          if (this.busy) return;
           const session = await this.ensureSession();
           if (!session) return;
+          if (this.busy) {
+            await this.queueMessage(session, message.text, message.delivery ?? "queue");
+            return;
+          }
+          const slash = await this.resolveSlash(session, message.text);
+          if (slash) {
+            await this.runSlash(session, message.text, slash);
+            return;
+          }
           const sending = this.attachments;
           this.attachments = [];
           this.postAttachments();
@@ -636,6 +800,8 @@ export class ChatPanel {
     this.busy = false;
     await old?.dispose();
     this.attachments = [];
+    this.queue = [];
+    this.slashCache = undefined;
     this.resetChanges();
     this.post({ type: "reset" });
     await this.sendInit();

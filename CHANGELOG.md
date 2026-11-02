@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.2 (unreleased)
+
+The rest of what Antares learned in 0.1.4–0.2.1 and fits opencode:
+
+- **`/` palette:** Capella's `/new` and `/compact` plus the server's commands and skills, with search; `/name args` runs a command, a skill rides on the message (2.x), and 1.x lists its skills among the commands.
+- **Queue and steer (2.x):** send while the agent works; the message waits in a tray, can be removed or hurried (**Send now**, Ctrl+Enter) and joins the conversation when the agent takes it.
+- **Task list** above the box from the agent's todo tool, rebuilt on replay.
+- **Pictures in answers** (`![alt](path)`) from the open folder, judged by their real bytes; web pictures are never loaded.
+- New optional capabilities in the compatibility report (queue, commands); the tested snapshots were refreshed for 2.2.5 and 1.19.5.
+- e2e: DeepSeek V4.1 Flash (Go) is used for the vision step; `E2E_SKIP_QUEUE=1` skips the queue step.
+
 ## 0.1.1 (2026-11-02)
 
 From what Antares learned since 0.1.4:

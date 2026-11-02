@@ -183,3 +183,36 @@ textarea { width: 100%; resize: none; border: 0; outline: 0; background: transpa
 .jump-bottom:hover { border-color: var(--gold); color: var(--gold); }
 .copy-answer { margin-top: 6px; }
 .row { flex-wrap: wrap; }
+
+/* ---- queue tray, / palette, task list, pictures in answers ---- */
+.composer .box { position: relative; }
+.queue-tray { display: flex; flex-direction: column; gap: 4px; padding: 2px 0 6px; }
+.queue-tray[hidden] { display: none; }
+.q-row { display: flex; align-items: center; gap: 8px; background: var(--raised); border: 1px dashed var(--line); border-radius: 8px; padding: 3px 4px 3px 8px; font-size: 12px; }
+.q-kind { flex: none; color: var(--gold); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+.q-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-files { flex: none; max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-row .x { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 4px; }
+.q-row .x:hover { color: var(--fg); }
+
+.slash { position: absolute; left: 0; right: 0; bottom: 100%; margin-bottom: 6px; max-height: 260px; overflow-y: auto; background: var(--raised); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); padding: 4px; z-index: 20; }
+.slash[hidden] { display: none; }
+.slash-row { display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left; background: none; border: 0; border-radius: 6px; color: var(--fg); cursor: pointer; font: inherit; font-size: 12px; padding: 4px 8px; }
+.slash-row.on, .slash-row:hover { background: color-mix(in srgb, var(--gold) 16%, transparent); }
+.slash-name { flex: none; font-family: var(--vscode-editor-font-family, monospace); }
+.slash-kind { flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.slash-kind.skill { color: var(--teal, var(--gold)); }
+.slash-desc { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.todos { margin: 0 16px 6px; background: var(--raised); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
+.todos[hidden] { display: none; }
+.todos summary { cursor: pointer; padding: 5px 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.todos ul { list-style: none; margin: 0; padding: 2px 10px 8px; display: flex; flex-direction: column; gap: 3px; max-height: 160px; overflow-y: auto; }
+.todo { display: flex; gap: 6px; }
+.todo .glyph { flex: none; color: var(--muted); }
+.todo.in_progress .glyph { color: var(--gold); }
+.todo.completed { color: var(--muted); text-decoration: line-through; }
+
+.answer-pic { display: block; max-width: 100%; max-height: 360px; border-radius: 8px; border: 1px solid var(--line); margin: 6px 0; }
+.answer-img { color: var(--muted); font-style: italic; }
+.answer-img.failed { color: var(--error); }

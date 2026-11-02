@@ -1,4 +1,4 @@
-import type { Backend, ModelRef, PendingApproval, PromptFile } from "./backend.ts";
+import type { Backend, ModelRef, PendingApproval, PromptFile, PromptOptions, SlashEntry } from "./backend.ts";
 import { ApiError, type OpencodeClient } from "./client.ts";
 import { mapFrame, mapModels, parseFrame, type MapResult, type ModelInfo } from "./events.ts";
 import { mapSessionRows, replayItems, type ReplayItem, type SessionRow } from "./history.ts";
@@ -55,8 +55,47 @@ export class BackendV2 implements Backend {
     await this.client.post(`/api/session/${sessionId}/agent`, { agent: m.agent });
   }
 
-  async prompt(sessionId: string, text: string, files: readonly PromptFile[]): Promise<void> {
-    await this.client.post(`/api/session/${sessionId}/prompt`, files.length > 0 ? { text, files: files.map((f) => ({ uri: f.uri, name: f.name })) } : { text });
+  readonly canQueue = true;
+
+  async prompt(sessionId: string, text: string, files: readonly PromptFile[], options: PromptOptions = {}): Promise<string | undefined> {
+    const body: Record<string, unknown> = { text };
+    if (files.length > 0) body.files = files.map((f) => ({ uri: f.uri, name: f.name }));
+    if (options.skillIds && options.skillIds.length > 0) body.skills = options.skillIds.map((id) => ({ id }));
+    if (options.delivery) body.delivery = options.delivery;
+    const sent = await this.client.post<{ data?: { id?: unknown } }>(`/api/session/${sessionId}/prompt`, body);
+    return typeof sent?.data?.id === "string" ? sent.data.id : undefined;
+  }
+
+  async queued(sessionId: string): Promise<string[]> {
+    const inbox = await this.client.get<{ data?: Array<{ id?: unknown; type?: unknown }> }>(`/api/session/${sessionId}/inbox`);
+    return (inbox?.data ?? []).flatMap((item) => (item.type === "user" && typeof item.id === "string" ? [item.id] : []));
+  }
+
+  async dequeue(sessionId: string, inboxId: string): Promise<void> {
+    await this.client.request("DELETE", `/api/session/${sessionId}/inbox/${inboxId}`);
+  }
+
+  async steer(sessionId: string, inboxId: string): Promise<void> {
+    await this.client.request("PATCH", `/api/session/${sessionId}/inbox/${inboxId}`, { body: { delivery: "steer" } });
+  }
+
+  async slash(): Promise<SlashEntry[]> {
+    const [commands, skills] = await Promise.all([
+      this.client.get<{ data?: Array<{ name?: unknown; description?: unknown }> }>("/api/command").catch(() => undefined),
+      this.client.get<{ data?: Array<{ id?: unknown; name?: unknown; description?: unknown }> }>("/api/skill").catch(() => undefined),
+    ]);
+    const out: SlashEntry[] = [];
+    for (const c of commands?.data ?? []) if (typeof c.name === "string") out.push({ kind: "command", name: c.name, description: typeof c.description === "string" ? c.description : undefined });
+    for (const s of skills?.data ?? []) if (typeof s.name === "string" && typeof s.id === "string") out.push({ kind: "skill", name: s.name, id: s.id, description: typeof s.description === "string" ? s.description : undefined });
+    return out;
+  }
+
+  async runCommand(sessionId: string, name: string, args: string, files: readonly PromptFile[]): Promise<void> {
+    await this.client.post(`/api/session/${sessionId}/command`, { name, text: args, ...(files.length > 0 ? { files: files.map((f) => ({ uri: f.uri, name: f.name })) } : {}) });
+  }
+
+  async compact(sessionId: string): Promise<void> {
+    await this.client.post(`/api/session/${sessionId}/compact`, {});
   }
 
   async interrupt(sessionId: string): Promise<void> {

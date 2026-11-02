@@ -41,6 +41,8 @@ export type ChatEvent =
   | { type: "approval-requested"; sessionId: string; requestId: string; action: string; resources: string[]; /** Patterns an "always" answer would remember. */ saves: string[]; source?: { messageId: string; callId: string } }
   | { type: "approval-resolved"; sessionId: string; requestId: string; reply: string }
   | { type: "step-ended"; sessionId: string; messageId: string; finish: string; tokens?: TokenUsage }
+  /** A message that was waiting in the queue has just been taken into the turn. */
+  | { type: "inbox-delivered"; sessionId: string; inboxId: string }
   | { type: "turn-ended"; sessionId: string; outcome: "succeeded" | "failed" | "interrupted" | "other"; error?: TurnError };
 
 export type MapResult = { kind: "event"; event: ChatEvent } | { kind: "ignored" } | { kind: "unknown"; eventType: string };
@@ -195,8 +197,11 @@ export function mapFrame(frame: Frame, sessionId: string): MapResult {
     case "session.text.started":
     case "session.step.failed":
     case "session.step.streamed":
+    case "session.inbox.delivered": {
+      const inboxId = str(d.inboxID);
+      return inboxId ? event({ type: "inbox-delivered", sessionId, inboxId }) : { kind: "ignored" };
+    }
     case "session.inbox.enqueued":
-    case "session.inbox.delivered":
       return { kind: "ignored" };
     default:
       return { kind: "unknown", eventType: frame.type };

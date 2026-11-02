@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { Backend, ModelRef, PromptFile } from "./backend.ts";
+import type { Backend, ModelRef, PromptFile, PromptOptions, SlashEntry } from "./backend.ts";
 import { BackendV1 } from "./backend-v1.ts";
 import { BackendV2 } from "./backend-v2.ts";
 import { EventStream, OpencodeClient } from "./client.ts";
@@ -247,10 +247,45 @@ export class OpencodeSession extends EventEmitter {
     this.effortValue = effort;
   }
 
-  /** Sends one user message. Returns when the host has accepted it; the turn then streams as events. */
-  async send(text: string, files: readonly PromptFile[] = []): Promise<void> {
+  /** Whether a message can be sent while a turn runs. Known once the server answered. */
+  get canQueue(): boolean {
+    return this.backend?.canQueue ?? false;
+  }
+
+  /**
+   * Sends one user message. Returns when the host has accepted it (with the id the server gave it, which a queued message is
+   * known by); the turn then streams as events.
+   */
+  async send(text: string, files: readonly PromptFile[] = [], options?: PromptOptions): Promise<string | undefined> {
     const id = await this.ensureSession();
-    await this.requireBackend().prompt(id, text, files);
+    return this.requireBackend().prompt(id, text, files, options);
+  }
+
+  async queued(): Promise<string[]> {
+    return this.sessionId ? this.requireBackend().queued(this.sessionId) : [];
+  }
+
+  async dequeue(inboxId: string): Promise<void> {
+    if (this.sessionId) await this.requireBackend().dequeue(this.sessionId, assertId(inboxId, "msg"));
+  }
+
+  async steer(inboxId: string): Promise<void> {
+    if (this.sessionId) await this.requireBackend().steer(this.sessionId, assertId(inboxId, "msg"));
+  }
+
+  /** The commands and skills the `/` palette offers. An empty list when the server does not say. */
+  async slash(): Promise<SlashEntry[]> {
+    return this.requireBackend().slash().catch(() => []);
+  }
+
+  async runCommand(name: string, args: string, files: readonly PromptFile[] = []): Promise<void> {
+    const id = await this.ensureSession();
+    await this.requireBackend().runCommand(id, name, args, files);
+  }
+
+  async compact(): Promise<void> {
+    const id = await this.ensureSession();
+    await this.requireBackend().compact(id);
   }
 
   async interrupt(): Promise<void> {
@@ -326,8 +361,8 @@ export class OpencodeSession extends EventEmitter {
 }
 
 /** Ids from the page become part of a URL path: only the shapes opencode really uses are let through (`ses_...`, `per_...`). */
-export function assertId(id: string, prefix: "ses" | "per"): string {
-  if (!new RegExp(`^${prefix}_[A-Za-z0-9]+$`).test(id)) throw new Error(`not a valid ${prefix === "ses" ? "session" : "permission request"} id`);
+export function assertId(id: string, prefix: "ses" | "per" | "msg"): string {
+  if (!new RegExp(`^${prefix}_[A-Za-z0-9]+$`).test(id)) throw new Error(`not a valid ${prefix === "ses" ? "session" : prefix === "msg" ? "queued message" : "permission request"} id`);
   return id;
 }
 

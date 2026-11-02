@@ -15,6 +15,10 @@ function inline(raw: string): string {
     return `\u0000${spans.length - 1}\u0000`;
   });
   text = text
+    // A picture: only one on disk is shown (the extension reads it, inside the open folder); a web address stays a plain link.
+    .replace(/!\[([^\]\n]*)\]\(([^\s)]+)\)/g, (_m, alt: string, src: string) =>
+      /^https?:\/\//.test(src) ? `<a data-href="${src}" title="${src}">${alt || src}</a>` : `<span class="answer-img" data-src="${src}" title="${alt}">${alt || src}</span>`,
+    )
     .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, label: string, url: string) => `<a data-href="${url}" title="${url}">${label}</a>`)
     .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");

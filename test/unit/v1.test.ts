@@ -249,3 +249,12 @@ test("a spent free allowance (status retry, as 1.19.5 sends it) ends the turn on
   const other = run(new V1EventMapper(), [frame("session.status", { sessionID: S, status: { type: "busy" } }), frame("session.status", { sessionID: S, status: { type: "retry", attempt: 1, message: "overloaded" } })]);
   assert.deepEqual(other.map((e) => e.type), ["turn-started"]);
 });
+
+test("on 1.x there is no queue; the palette is the server's command list, skills among them", async () => {
+  const { session } = make();
+  await session.start();
+  assert.equal(session.canQueue, false);
+  assert.deepEqual(await session.queued(), []);
+  const rows = await session.slash();
+  assert.deepEqual(rows.map((r) => `${r.kind}:${r.name}`), ["command:review", "skill:pdf"]);
+});

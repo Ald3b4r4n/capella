@@ -32,12 +32,41 @@ const readBody = (req) =>
     req.on("end", () => resolve(text ? JSON.parse(text) : {}));
   });
 
+// Messages sent while a turn runs: `delivery: "queue"` waits for the end of the work, `steer` joins it at the next step.
+const inbox = [];
+let running = false;
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
 async function runTurn(text) {
+  running = true;
+  emit("session.execution.started", { sessionID: session.id });
+  await runStep(text);
+  // The queue drains inside the same execution, like the real server.
+  while (inbox.length > 0) {
+    const next = inbox.shift();
+    emit("session.inbox.delivered", { sessionID: session.id, inboxID: next.id });
+    await runStep(next.payload.text);
+  }
+  running = false;
+  emit("session.execution.succeeded", { sessionID: session.id });
+}
+
+async function runStep(text) {
   const sid = session.id;
   const msg = "msg_1";
-  emit("session.execution.started", { sessionID: sid });
+  if (text.startsWith("slow:")) {
+    await wait(700);
+    text = text.slice(5);
+  }
   emit("session.step.started", { sessionID: sid, assistantMessageID: msg, agent: session.agent, model: { id: selected?.id, providerID: selected?.providerID } });
-  if (text.startsWith("ask:")) {
+  if (text.startsWith("todo:")) {
+    // A task list the agent keeps: the tool call carries the whole list.
+    const todos = [{ content: "Read the file", status: "completed" }, { content: "Write the summary", status: "in_progress" }, { content: "Check it", status: "pending" }];
+    emit("session.tool.input.started", { sessionID: sid, assistantMessageID: msg, id: "call_todo", name: "todowrite" });
+    emit("session.tool.input.ended", { sessionID: sid, assistantMessageID: msg, id: "call_todo", text: JSON.stringify({ todos }) });
+    emit("session.tool.called", { sessionID: sid, assistantMessageID: msg, id: "call_todo", input: { todos }, executed: false });
+    emit("session.tool.success", { sessionID: sid, assistantMessageID: msg, id: "call_todo", content: [{ type: "text", text: "ok" }] });
+  } else if (text.startsWith("ask:")) {
     const command = text.slice(4);
     emit("session.tool.input.started", { sessionID: sid, assistantMessageID: msg, id: "call_1", name: "bash" });
     emit("session.tool.called", { sessionID: sid, assistantMessageID: msg, id: "call_1", input: { command }, executed: false });
@@ -55,7 +84,6 @@ async function runTurn(text) {
     emit("session.text.ended", { sessionID: sid, assistantMessageID: msg, ordinal: 0, text: "echo: " + text });
   }
   emit("session.step.ended", { sessionID: sid, assistantMessageID: msg, finish: "stop", tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } } });
-  emit("session.execution.succeeded", { sessionID: sid });
 }
 
 const server = createServer(async (req, res) => {
@@ -149,8 +177,34 @@ const server = createServer(async (req, res) => {
     selected = body.model;
     return json(res, 200);
   }
+  if (req.method === "GET" && path === "/api/command") return json(res, 200, { location: { directory: "x" }, data: [{ name: "review", description: "Review the changes" }, { name: "init" }] });
+  if (req.method === "GET" && path === "/api/skill") return json(res, 200, { location: { directory: "x" }, data: [{ id: "skl_pdf", name: "pdf", description: "Work with PDF files", path: "/x", content: "" }] });
+  if (req.method === "POST" && path === "/api/session/ses_1/command") {
+    json(res, 200, { data: { id: "msg_c" } });
+    void runTurn("command " + body.name + " " + body.text);
+    return;
+  }
+  if (req.method === "POST" && path === "/api/session/ses_1/compact") return json(res, 200, { data: true });
+  if (req.method === "GET" && path === "/api/session/ses_1/inbox") return json(res, 200, { data: inbox });
+  const queued = /^\/api\/session\/ses_1\/inbox\/(msg_\w+)$/.exec(path);
+  if (queued && req.method === "DELETE") {
+    const at = inbox.findIndex((i) => i.id === queued[1]);
+    if (at >= 0) inbox.splice(at, 1);
+    return json(res, 200);
+  }
+  if (queued && req.method === "PATCH") {
+    const item = inbox.find((i) => i.id === queued[1]);
+    if (item) item.delivery = body.delivery;
+    return json(res, 200);
+  }
   if (req.method === "POST" && path === "/api/session/ses_1/prompt") {
-    json(res, 200, { data: { id: "msg_u", type: "user" } });
+    if (running && (body.delivery === "queue" || body.delivery === "steer")) {
+      const item = { id: "msg_q" + (inbox.length + 1) + Math.random().toString(36).slice(2, 6), sessionID: "ses_1", type: "user", payload: { text: body.text, files: body.files }, delivery: body.delivery };
+      inbox.push(item);
+      emit("session.inbox.enqueued", { inboxID: item.id, sessionID: "ses_1", item });
+      return json(res, 200, { data: { id: item.id, delivery: body.delivery } });
+    }
+    json(res, 200, { data: { id: "msg_u", type: "user", delivery: body.delivery ?? "steer", skills: body.skills } });
     void runTurn(body.text);
     return;
   }

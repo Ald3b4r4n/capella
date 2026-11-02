@@ -228,3 +228,67 @@ test("web access is sent as rules: at creation, and replacing the mode's on a li
   const patch = (await get()).filter((c) => c.method === "PATCH").at(-1);
   assert.deepEqual(patch?.body.permissions?.filter((r) => /^web/.test(r.action)).map((r) => r.effect), ["ask", "ask"], "back to the mode's own rule");
 });
+
+test("a message sent while the agent works is queued, named by the server, delivered inside the same turn, and can be removed or hurried", async () => {
+  const { session, events } = make();
+  await session.start();
+  assert.equal(session.canQueue, true);
+  await session.send("slow:first");
+  await until(events, "turn-started");
+  const keep = await session.send("second", [], { delivery: "queue" });
+  const drop = await session.send("never", [], { delivery: "queue" });
+  assert.match(keep ?? "", /^msg_q/);
+  assert.deepEqual((await session.queued()).sort(), [keep, drop].sort());
+  await session.dequeue(drop!);
+  assert.deepEqual(await session.queued(), [keep]);
+  await until(events, "turn-ended");
+  const delivered = events.filter((e) => e.type === "inbox-delivered");
+  assert.deepEqual(delivered.map((e) => (e.type === "inbox-delivered" ? e.inboxId : "")), [keep]);
+  // one execution: the queued message did not start another turn
+  assert.equal(events.filter((e) => e.type === "turn-started").length, 1);
+  const texts = events.flatMap((e) => (e.type === "text" ? [e.delta] : []));
+  assert.deepEqual(texts, ["echo: first", "echo: second"]);
+  const sent = (await (session as unknown as { client: OpencodeClient }).client.get<Array<{ method: string; path: string; body: Record<string, unknown> }>>("/api/calls")).filter((c) => c.path.endsWith("/prompt") || c.path.includes("/inbox"));
+  assert.equal(sent[1]?.body.delivery, "queue");
+  assert.ok(sent.some((c) => c.method === "DELETE"));
+});
+
+test("a queued message can be handed to the agent at once (steer), and ids from the page are checked", async () => {
+  const { session, events } = make();
+  await session.send("slow:first");
+  await until(events, "turn-started");
+  const id = await session.send("second", [], { delivery: "queue" });
+  await session.steer(id!);
+  const calls = await (session as unknown as { client: OpencodeClient }).client.get<Array<{ method: string; path: string; body: Record<string, unknown> }>>("/api/calls");
+  assert.deepEqual(calls.filter((c) => c.method === "PATCH" && c.path.includes("/inbox/")).map((c) => c.body), [{ delivery: "steer" }]);
+  await assert.rejects(session.dequeue("../../x"), /not a valid queued message id/);
+  await until(events, "turn-ended");
+});
+
+test("the / palette lists server commands and skills; a command runs on the session, a skill rides on a prompt", async () => {
+  const { session, events } = make();
+  await session.start();
+  const rows = await session.slash();
+  assert.deepEqual(rows.map((r) => `${r.kind}:${r.name}`), ["command:review", "command:init", "skill:pdf"]);
+  assert.equal(rows.find((r) => r.kind === "skill")?.id, "skl_pdf");
+  await session.runCommand("review", "the last commit");
+  await until(events, "turn-ended");
+  assert.equal(events.find((e) => e.type === "text" && e.delta.startsWith("echo: command review"))?.type, "text");
+  await session.send("Use the pdf skill.", [], { skillIds: ["skl_pdf"] });
+  await until(events, "turn-ended", 2);
+  const sent = (await (session as unknown as { client: OpencodeClient }).client.get<Array<{ method: string; path: string; body: Record<string, unknown> }>>("/api/calls")).filter((c) => c.path.endsWith("/prompt")).pop();
+  assert.deepEqual(sent?.body.skills, [{ id: "skl_pdf" }]);
+  await session.compact();
+  assert.ok((await calls(session)).includes("POST /api/session/ses_1/compact"));
+});
+
+test("the task list the agent keeps arrives as a tool call with its input", async () => {
+  const { session, events } = make();
+  await session.send("todo:x");
+  await until(events, "turn-ended");
+  const call = events.find((e) => e.type === "tool-called");
+  const todos = call?.type === "tool-called" ? (call.input as { todos: Array<{ status: string }> }).todos : [];
+  assert.deepEqual(todos.map((t) => t.status), ["completed", "in_progress", "pending"]);
+  const started = events.find((e) => e.type === "tool-started");
+  assert.equal(started?.type === "tool-started" && started.name, "todowrite");
+});

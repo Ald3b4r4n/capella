@@ -71,12 +71,34 @@ export interface UsageView {
   stale: boolean;
 }
 
+/** One message waiting for its turn, as the tray above the message box shows it. */
+export interface QueueItemView {
+  id: string;
+  text: string;
+  files: string[];
+  delivery: "queue" | "steer";
+}
+
+/** One row of the `/` palette. */
+export interface SlashEntryView {
+  kind: "command" | "skill" | "builtin";
+  name: string;
+  description?: string;
+}
+
 /** Messages the extension sends to the page. Plain data only: nothing here carries a secret. */
 export type ToWebview =
   | { type: "init"; version?: string; workspace: string; modes: ModeRow[]; mode: string; models: ModelRow[]; model?: string; features?: { history: boolean } }
   | { type: "event"; event: SessionEvent }
   | { type: "user"; text: string; files?: Array<{ name: string; mime: string; thumb?: string }> }
   | { type: "attachments"; items: AttachmentView[] }
+  /** The messages waiting for their turn; `canQueue` is false on opencode 1.x, which has no queue. */
+  | { type: "queue"; items: QueueItemView[]; canQueue: boolean }
+  /** A queued message has just been taken into the turn: it joins the conversation here. */
+  | { type: "delivered"; text: string; files?: Array<{ name: string; mime: string; thumb?: string }> }
+  | { type: "slash"; entries: SlashEntryView[] }
+  /** An image an answer pointed to, read by the extension (inside the open folder only). */
+  | { type: "image"; src: string; uri?: string; error?: string }
   | { type: "fileChange"; change: FileChangeView }
   | { type: "changes"; rows: ChangeRowView[] }
   | { type: "busy"; value: boolean }
@@ -96,7 +118,11 @@ export type ToWebview =
 /** Messages the page sends to the extension. */
 export type FromWebview =
   | { type: "ready" }
-  | { type: "send"; text: string }
+  | { type: "send"; text: string; delivery?: "queue" | "steer" }
+  | { type: "unqueue"; id: string }
+  | { type: "steerNow"; id: string }
+  | { type: "listSlash" }
+  | { type: "loadImage"; src: string }
   | { type: "stop" }
   | { type: "newChat" }
   | { type: "setMode"; id: string }

@@ -287,10 +287,53 @@ try {
   check("the real opencode started and Capella shows its version", /^opencode \d/.test(chips.version), chips.version);
   check("the chat starts in Plan mode", chips.mode === "Plan", chips.mode);
   check("styles and the brand mark loaded through the webview", await evalWeb("getComputedStyle(d.body).backgroundColor !== 'rgba(0, 0, 0, 0)' && d.querySelector('.welcome img').naturalWidth > 0"));
+  // The / palette, the task list and a picture in an answer: none needs a model turn (the page is given the events a turn would send).
+  const paletteChecks = async () => {
+    const type = (value) => evalWeb(`(() => { const i = d.getElementById('input'); i.value = ${JSON.stringify(value)}; i.dispatchEvent(new Event('input')); i.focus(); return true; })()`);
+    const youBefore = await evalWeb("d.querySelectorAll('.you').length");
+    await type("/");
+    const listed = await waitFor("the palette", () => evalWeb("(() => { const m = d.getElementById('slashMenu'); return m.hidden ? null : [...m.querySelectorAll('.slash-row')].map(r => r.querySelector('.slash-name').textContent + ':' + r.querySelector('.slash-kind').textContent); })()"), 20000).catch(() => null);
+    console.log("palette:", JSON.stringify(listed));
+    check("typing / opens the palette with Capella's own commands and the server's", !!listed && listed.includes("/new:builtin") && listed.includes("/compact:builtin") && listed.some((r) => r.endsWith(":command") || r.endsWith(":skill")), JSON.stringify(listed));
+    await shot("27-palette");
+    await type("/comp");
+    const narrowed = await evalWeb("[...d.querySelectorAll('#slashMenu .slash-name')].map(x => x.textContent)");
+    check("typing narrows the palette", narrowed.length >= 1 && narrowed[0] === "/compact" && !narrowed.includes("/new"), JSON.stringify(narrowed));
+    await evalWeb("(() => { const i = d.getElementById('input'); i.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); return true; })()");
+    check("Enter picks the highlighted entry instead of sending, and the palette closes", (await evalWeb("d.getElementById('input').value")) === "/compact " && (await evalWeb("d.getElementById('slashMenu').hidden")) && (await evalWeb("d.querySelectorAll('.you').length")) === youBefore);
+    await type("/usr/bin is a path, not a command");
+    check("text with a space after the slash is not a palette", await evalWeb("d.getElementById('slashMenu').hidden"));
+    await type("");
+
+    // The task list: the page is told a todowrite call happened.
+    const todos = [{ content: "Read the file", status: "completed" }, { content: "Write the summary", status: "in_progress" }, { content: "Check it", status: "pending" }];
+    const post = (event) => evalWeb(`(() => { w.postMessage({ type: 'event', event: ${JSON.stringify(event)} }, '*'); return true; })()`);
+    await post({ type: "tool-started", sessionId: "s", messageId: "m_inj", callId: "call_todo", name: "todowrite" });
+    await post({ type: "tool-called", sessionId: "s", messageId: "m_inj", callId: "call_todo", input: { todos } });
+    const tasks = await waitFor("the task list", () => evalWeb("(() => { const t = d.getElementById('todos'); return t.hidden ? null : { summary: t.querySelector('summary').textContent, rows: [...t.querySelectorAll('li')].map(li => li.className + ':' + li.textContent) }; })()"), 10000).catch(() => null);
+    check("the agent's task list shows with its progress", !!tasks && /^Tasks 1\/3/.test(tasks.summary) && tasks.summary.includes("Write the summary") && tasks.rows.length === 3 && tasks.rows[0].startsWith("todo completed"), JSON.stringify(tasks));
+    await evalWeb("(() => { d.getElementById('todos').open = true; return true; })()");
+    await shot("28-task-list");
+
+    // A picture an answer points to: read by the extension from the open folder; one outside the folder is refused.
+    writeFileSync(join(workspace, "chart.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"));
+    // text-end paints at once; a webview behind another editor tab gets no animation frames, which the streamed deltas wait for.
+    const answer = "Here it is: ![the chart](chart.png) and ![elsewhere](../outside.png) and ![web](https://example.com/p.png)";
+    await post({ type: "text", sessionId: "s", messageId: "m_inj", ordinal: 0, delta: answer });
+    await post({ type: "text-end", sessionId: "s", messageId: "m_inj", ordinal: 0, text: answer });
+    const pics = await waitFor("the picture", () => evalWeb("(() => { const i = d.querySelector('img.answer-pic'); return i && i.naturalWidth > 0 ? { src: i.src.slice(0, 22), alt: i.alt, failed: [...d.querySelectorAll('.answer-img.failed')].map(x => x.textContent), web: !!d.querySelector('.md img[src^=http]') } : null; })()"), 15000).catch(() => null);
+    console.log("answer pictures:", JSON.stringify(pics));
+    check("a picture from the open folder is shown in the answer", !!pics && pics.src.startsWith("data:image/png;base64") && pics.alt === "the chart", JSON.stringify(pics));
+    check("a picture outside the folder is refused, and a web picture is never loaded", !!pics && pics.failed.length === 1 && /picture not shown/.test(pics.failed[0]) && pics.web === false, JSON.stringify(pics));
+    await shot("29-answer-picture");
+    await post({ type: "turn-ended", sessionId: "s", outcome: "succeeded" });
+  };
+
   if (process.env.E2E_UI_ONLY) {
     // Only the checks that need no model turn (the free models have a cap of their own).
     await scrollChecks();
     await controlChecks();
+    await paletteChecks();
     console.log(failed === 0 ? `[${label}] ALL CHECKS PASSED (UI only)` : `[${label}] ${failed} CHECK(S) FAILED (UI only)`);
     throw Object.assign(new Error("ui-only run finished"), { v1Done: true });
   }
@@ -541,6 +584,27 @@ try {
     }
     check("the model saw the attached image (it names the colour red)", /red/i.test(seen), seen);
     await shot("19-attachments-answer");
+  }
+
+  await paletteChecks();
+
+  // A message sent while the agent works waits in the queue and joins the same turn (opencode 2.x only).
+  if (!V1 && !process.env.E2E_SKIP_QUEUE) {
+    await evalWeb("(() => { const i = d.getElementById('input'); i.value = 'Write a detailed story of about 400 words about a lighthouse keeper. Plain text.'; i.dispatchEvent(new Event('input')); d.getElementById('send').click(); return true; })()");
+    await waitFor("the agent to start working", () => evalWeb("!d.getElementById('stop').hidden"), 30000);
+    const canType = await evalWeb("!d.getElementById('send').hidden && /queues your message/.test(d.getElementById('input').placeholder)");
+    check("while the agent works, Send stays and the box says Enter queues", canType, await evalWeb("d.getElementById('input').placeholder"));
+    await evalWeb("(() => { const i = d.getElementById('input'); i.value = 'Now answer with only the word PINEAPPLE.'; i.dispatchEvent(new Event('input')); i.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); return true; })()");
+    const tray = await waitFor("the queue tray", () => evalWeb("(() => { const t = d.getElementById('queueTray'); return t.hidden ? null : [...t.querySelectorAll('.q-row')].map(r => r.textContent); })()"), 15000).catch(() => null);
+    console.log("queue tray:", JSON.stringify(tray));
+    check("the message waits in the tray as queued, with Send now and a remove button", !!tray && tray.length === 1 && /queued/.test(tray[0]) && /PINEAPPLE/.test(tray[0]) && (await evalWeb("!!d.querySelector('#queueTray .btn') && !!d.querySelector('#queueTray .x')")), JSON.stringify(tray));
+    check("the box is empty again and the message is not in the conversation yet", (await evalWeb("d.getElementById('input').value")) === "" && (await evalWeb("[...d.querySelectorAll('.you')].every(y => !/PINEAPPLE/.test(y.textContent))")));
+    await shot("30-queue");
+    await waitFor("the queued message to join the turn", () => evalWeb("[...d.querySelectorAll('.you')].some(y => /PINEAPPLE/.test(y.textContent))"), 120000);
+    await waitFor("the whole turn to end", () => evalWeb("d.getElementById('stop').hidden && d.getElementById('queueTray').hidden"), 120000);
+    const joined = await evalWeb("(() => { const bubbles = [...d.querySelectorAll('.you')]; const last = bubbles[bubbles.length - 1]; const after = [...d.querySelectorAll('.turn')].filter(t => last.compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING); return { tray: d.getElementById('queueTray').hidden, answer: after.map(t => t.textContent).join(' ').includes('PINEAPPLE'), live: !!d.querySelector('.turn.live') }; })()");
+    check("the queued message joined the conversation, the tray emptied and the answer follows it", joined.tray && joined.answer && !joined.live, JSON.stringify(joined));
+    await shot("31-queue-delivered");
   }
 
   // Voice dictation with the fake recorder and transcriber: the button records, stops, and the text lands in the box

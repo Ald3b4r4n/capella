@@ -1,4 +1,4 @@
-import type { Backend, ModelRef, PendingApproval, PromptFile } from "./backend.ts";
+import type { Backend, ModelRef, PendingApproval, PromptFile, PromptOptions, SlashEntry } from "./backend.ts";
 import type { OpencodeClient } from "./client.ts";
 import { familyOf, type MapResult, type ModelInfo } from "./events.ts";
 import { V1EventMapper } from "./events-v1.ts";
@@ -111,10 +111,43 @@ export class BackendV1 implements Backend {
     await this.client.request("PATCH", `/session/${sessionId}`, { body: { permission: v1Rules(m, web) } });
   }
 
-  async prompt(sessionId: string, text: string, files: readonly PromptFile[]): Promise<void> {
+  readonly canQueue = false;
+
+  async prompt(sessionId: string, text: string, files: readonly PromptFile[], _options?: PromptOptions): Promise<string | undefined> {
     if (!this.model) throw new Error("no model is selected");
     const parts: unknown[] = [{ type: "text", text }, ...files.map((f) => ({ type: "file", mime: mimeFor(f), url: f.uri, filename: f.name }))];
     await this.client.post(`/session/${sessionId}/prompt_async`, { model: { providerID: this.model.providerId, modelID: this.model.modelId }, agent: this.agent, ...(this.effort ? { variant: this.effort } : {}), parts });
+    return undefined;
+  }
+
+  async queued(): Promise<string[]> {
+    return [];
+  }
+
+  async dequeue(): Promise<void> {
+    throw new Error("opencode 1.x has no message queue");
+  }
+
+  async steer(): Promise<void> {
+    throw new Error("opencode 1.x cannot steer a running turn");
+  }
+
+  async slash(): Promise<SlashEntry[]> {
+    // 1.x lists its skills among the commands (`source: "skill"`): one list serves the palette.
+    const rows = await this.client.get<Array<{ name?: unknown; description?: unknown; source?: unknown }>>("/command").catch(() => undefined);
+    return (Array.isArray(rows) ? rows : []).flatMap((c): SlashEntry[] => (typeof c.name === "string" ? [{ kind: c.source === "skill" ? "skill" : "command", name: c.name, description: typeof c.description === "string" ? c.description : undefined }] : []));
+  }
+
+  async runCommand(sessionId: string, name: string, args: string, files: readonly PromptFile[]): Promise<void> {
+    if (!this.model) throw new Error("no model is selected");
+    const parts = files.map((f) => ({ type: "file", mime: mimeFor(f), url: f.uri, filename: f.name }));
+    // The legacy route answers when the command has finished; the turn itself streams as events, so it is not awaited.
+    void this.client.request("POST", `/session/${sessionId}/command`, { body: { command: name, arguments: args, model: `${this.model.providerId}/${this.model.modelId}`, agent: this.agent, ...(this.effort ? { variant: this.effort } : {}), ...(parts.length > 0 ? { parts } : {}) }, timeoutMs: 10 * 60 * 1000 }).catch(() => undefined);
+  }
+
+  async compact(sessionId: string): Promise<void> {
+    if (!this.model) throw new Error("no model is selected");
+    void this.client.request("POST", `/session/${sessionId}/summarize`, { body: { providerID: this.model.providerId, modelID: this.model.modelId }, timeoutMs: 10 * 60 * 1000 }).catch(() => undefined);
   }
 
   async interrupt(sessionId: string): Promise<void> {

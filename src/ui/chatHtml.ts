@@ -56,8 +56,11 @@ export function chatHtml(options: ChatHtmlOptions): string {
 <button id="jumpBottom" class="jump-bottom" hidden title="Scroll to the latest message" aria-label="Scroll to the latest message">\u2193</button>
 <div id="notice" class="notice" role="status" hidden></div>
 <div id="voiceStatus" class="notice voice" role="status" hidden></div>
+<details id="todos" class="todos" hidden><summary id="todosSummary"></summary><ul id="todosList"></ul></details>
 <footer class="composer">
   <div class="box">
+    <div id="slashMenu" class="slash" role="listbox" aria-label="Commands and skills" hidden></div>
+    <div id="queueTray" class="queue-tray" hidden aria-label="Messages waiting for their turn"></div>
     <div id="chips" class="chips" hidden aria-label="Attachments"></div>
     <textarea id="input" rows="1" placeholder="Ask opencode…  (Enter sends, Shift+Enter adds a line; paste or drop images)" aria-label="Message"></textarea>
     <div class="row">

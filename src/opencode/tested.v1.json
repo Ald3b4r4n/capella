@@ -1,6 +1,7 @@
 {
   "version": "1.19.5",
   "usedRoutes": [
+    "GET /command",
     "GET /config",
     "GET /config/providers",
     "GET /event",
@@ -12,9 +13,11 @@
     "PATCH /session/{sessionID}",
     "POST /session",
     "POST /session/{sessionID}/abort",
+    "POST /session/{sessionID}/command",
     "POST /session/{sessionID}/fork",
     "POST /session/{sessionID}/permissions/{permissionID}",
-    "POST /session/{sessionID}/prompt_async"
+    "POST /session/{sessionID}/prompt_async",
+    "POST /session/{sessionID}/summarize"
   ],
-  "fingerprint": "8178bea023b7"
+  "fingerprint": "4a1427c0d957"
 }
