@@ -48,10 +48,12 @@ export interface McpServerInfo {
   status: McpStatus;
   /** The error when it failed, trimmed. */
   detail?: string;
+  /** 2.x: the id its sign-in goes by (a server that needs a login is also an integration). */
+  integrationId?: string;
 }
 
-/** What Capella can add: a program to start, or a server to reach. Secrets (headers, environment) are not handled here. */
-export type McpConfig = { type: "local"; command: string[] } | { type: "remote"; url: string };
+/** What Capella can add: a program to start, or a server to reach. The environment and the headers carry secrets: they are only ever held in memory on the way to opencode. */
+export type McpConfig = { type: "local"; command: string[]; cwd?: string; environment?: Record<string, string> } | { type: "remote"; url: string; headers?: Record<string, string> };
 
 export interface SkillInfo {
   name: string;

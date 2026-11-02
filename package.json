@@ -2,7 +2,7 @@
   "name": "capella",
   "displayName": "Capella",
   "description": "Open-source editor interface for opencode 1.x and 2.x (Zen and Go): chat, approvals, diffs, usage and web access inside VS Code and its forks.",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "ald3b4r4n",
   "author": {
     "name": "Antonio Rafael Souza Cruz de Noronha",

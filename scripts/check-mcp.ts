@@ -5,7 +5,8 @@
 // Usage: node scripts/check-mcp.ts <opencode executable> [providerID/modelID]
 //   CAPELLA_ISOLATED=1  throwaway home with the API keys stripped (always for 1.x); CAPELLA_GO_AUTH=1 copies only the
 //                       `opencode-go` credential in.
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { OpencodeSession, type SessionEvent } from "../src/opencode/session.ts";
@@ -82,8 +83,53 @@ try {
   const allowed = await turn(ask, "once");
   check("after the approval the tool runs and the answer has what it returned", allowed.asked.some((a) => a.startsWith("capellaprobe_")) && /PINEAPPLE/.test(allowed.answer), allowed);
 
+  // environment variables, a working folder, and a configuration that is replaced by adding the same name again
+  const dump = join(base, "dump.json");
+  const wait = async (name: string, wanted: string): Promise<string> => {
+    let s = "";
+    for (let i = 0; i < 24 && s !== wanted; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      s = (await session.mcpList()).find((x) => x.name === name)?.status ?? "";
+    }
+    return s;
+  };
+  const read = () => (existsSync(dump) ? (JSON.parse(readFileSync(dump, "utf8")) as { value?: string; cwd?: string; authorization?: string | null }) : undefined);
+  await session.mcpAdd("capellaenv", { type: "local", command: [process.execPath, fixture], cwd: base, environment: { CAPELLA_TEST_DUMP_FILE: dump, CAPELLA_TEST_VALUE: "first" } });
+  await wait("capellaenv", "connected");
+  check("an environment variable given with the server reaches the program", read()?.value === "first", read());
+  check("its working folder is the one asked for (not the project folder it would default to)", (read()?.cwd ?? "").toLowerCase() === base.toLowerCase(), read()?.cwd);
+  await session.mcpAdd("capellaenv", { type: "local", command: [process.execPath, fixture], environment: { CAPELLA_TEST_DUMP_FILE: dump, CAPELLA_TEST_VALUE: "second" } });
+  await wait("capellaenv", "connected");
+  check("adding the same name again replaces it and restarts it with the new value", read()?.value === "second", read());
+  await session.mcpRemove("capellaenv");
+
+  // headers of a server on the web
+  const http = spawn(process.execPath, [join(import.meta.dirname, "..", "test", "fixtures", "mini-mcp-http.mjs")], { env: { ...process.env, CAPELLA_TEST_DUMP_FILE: dump }, stdio: ["ignore", "pipe", "inherit"] });
+  try {
+    const url = await new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("the http fixture did not start")), 10000);
+      http.stdout.on("data", (c: Buffer) => {
+        const m = /listening (http:\/\/\S+)/.exec(String(c));
+        if (m) {
+          clearTimeout(timer);
+          resolve(m[1]!);
+        }
+      });
+    });
+    rmSync(dump, { force: true });
+    await session.mcpAdd("capellaweb", { type: "remote", url, headers: { Authorization: "Bearer DUMMY-HEADER-VALUE" } });
+    const web = await wait("capellaweb", "connected");
+    check("a server on the web connects", web === "connected", web);
+    check("a header given with it is sent", read()?.authorization === "Bearer DUMMY-HEADER-VALUE", read());
+    await session.mcpRemove("capellaweb");
+  } finally {
+    http.kill();
+  }
+
   await session.setMode("plan");
-  const plan = await turn(ask, "reject");
+  // a model may answer from the earlier turns instead of calling the tool again: one more, differently worded, request is allowed
+  let plan = await turn(ask, "reject");
+  if (plan.asked.length === 0) plan = await turn("Make a NEW call now to the echo tool of capellaprobe with the text KUMQUAT. Do not reuse earlier results.", "reject");
   check("in Plan mode too the tool is asked about", plan.asked.some((a) => a.startsWith("capellaprobe_")), plan);
 
   await session.mcpSetEnabled("capellaprobe", false);

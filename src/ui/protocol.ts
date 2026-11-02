@@ -93,8 +93,10 @@ export interface McpRowView {
   detail?: string;
   /** Added through Capella: it can be removed here (and is started again in every chat of this project). */
   managed: boolean;
-  /** What a managed server runs or reaches, so that it is never a mystery. */
+  /** What a managed server runs or reaches, and the names (never the values) of what it is given. */
   summary?: string;
+  /** The server needs a browser sign-in and opencode offers one. */
+  integrationId?: string;
 }
 
 /** One provider in the Accounts section: how it can be connected and how it is. No secret is ever part of it. */
@@ -162,6 +164,9 @@ export type FromWebview =
   | { type: "mcpToggle"; name: string; on: boolean }
   | { type: "mcpAdd" }
   | { type: "mcpRemove"; name: string }
+  | { type: "mcpEdit"; name: string }
+  | { type: "mcpTest"; name: string }
+  | { type: "mcpSignIn"; name: string }
   | { type: "openSkill"; name: string }
   /** `method`: "key", or the id of one of the provider's browser sign-ins. */
   | { type: "accountConnect"; id: string; method: string }

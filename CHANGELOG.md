@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.6 (unreleased)
+
+- **MCP manager, complete:** servers added in Capella can be given environment variables or headers (values typed masked and kept only in the editor's secret storage, never shown again), **Edit**ed (command, address, working folder, variables, headers) and **Test**ed; a server that needs a login gets a **Sign in** button. The confirmation lists names, never values; a missing secret stops a server from starting half-configured. What was stored by 0.1.4 is read as before.
+- The MCP code moved out of the chat panel into `src/ui/mcpManager.ts` (the editor's boxes and questions) and `src/ui/mcpStore.ts` (what is stored and how it becomes opencode's configuration; pure and unit-tested).
+- Checked against the real 2.2.5 and 1.19.5: environment, working folder, replacement and headers (`scripts/check-mcp.ts`, with HTTP and stdio fixtures); in both editors, in a throwaway home (`E2E_TOOLS=1`), through the real boxes, with the secret read back from the keychain in a new chat.
+- Fix: the Tools panel is emptied when a new chat starts, so it never shows another chat's servers.
+
 ## 0.1.5 (2026-11-02)
 
 - **Accounts** (Tools, first section): connect Zen, Go or any other provider with an API key (masked box, stored by opencode; Capella keeps nothing and scrubs the key from any error) or, on 2.x, with a browser sign-in that opencode runs (the address and the code are shown and the site is named before anything opens); several keys per provider with **Use**; **Sign out** asks first. The model list and the usage meter are read again after a change.

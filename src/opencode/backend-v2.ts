@@ -155,13 +155,13 @@ export class BackendV2 implements Backend {
   }
 
   async mcpList(): Promise<McpServerInfo[]> {
-    const rows = await this.client.get<{ data?: Array<{ name?: unknown; status?: { status?: unknown; error?: unknown } }> }>("/api/mcp");
+    const rows = await this.client.get<{ data?: Array<{ name?: unknown; integrationID?: unknown; status?: { status?: unknown; error?: unknown } }> }>("/api/mcp");
     return (rows?.data ?? []).flatMap((row): McpServerInfo[] => {
       if (typeof row.name !== "string") return [];
       const raw = typeof row.status?.status === "string" ? row.status.status.toLowerCase().split("_").join("-") : "";
       const status: McpStatus = (["connected", "pending", "disabled", "failed", "needs-auth"] as const).find((s) => s === raw) ?? "unknown";
       const error = typeof row.status?.error === "string" ? row.status.error.replace(/\s+/g, " ").trim().slice(0, 240) : undefined;
-      return [{ name: row.name, status, detail: error ?? (status === "unknown" && raw ? raw : undefined) }];
+      return [{ name: row.name, status, detail: error ?? (status === "unknown" && raw ? raw : undefined), ...(typeof row.integrationID === "string" ? { integrationId: row.integrationID } : {}) }];
     });
   }
 

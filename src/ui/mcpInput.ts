@@ -58,3 +58,12 @@ export function describeMcp(config: McpConfig, long = false): string {
   const [program = "", ...args] = config.command;
   return long ? `Program: ${program}\n${args.length > 0 ? `Arguments: ${args.map(shown).join(" ")}` : "Arguments: (none)"}` : config.command.map(shown).join(" ");
 }
+
+/** An environment variable name: letters, digits and underscore, not starting with a digit. */
+export const validEnvName = (name: unknown): name is string => typeof name === "string" && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name);
+
+/** An HTTP header name (a token): letters, digits and a few signs; no spaces, no colon. */
+export const validHeaderName = (name: unknown): name is string => typeof name === "string" && /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/.test(name);
+
+/** A secret value as typed: not empty, and a single line (a line break in a header would be an injection). */
+export const validSecretValue = (value: unknown): value is string => typeof value === "string" && value.trim() !== "" && !/[\r\n\0]/.test(value);

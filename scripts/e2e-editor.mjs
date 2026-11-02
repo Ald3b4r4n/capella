@@ -60,8 +60,8 @@ mkdirSync(libFolder, { recursive: true });
 // "Add an MCP server" is driven for real (quick picks, input boxes and the question), with a tiny stdio server of the test fixtures.
 const miniMcp = join(root, "test", "fixtures", "mini-mcp.mjs");
 const childEnv = { ...process.env, CAPELLA_TRACE_FILE: traceFile, CAPELLA_DEV_ADD_FOLDER: libFolder };
-// E2E_ACCOUNTS connects and signs out a DUMMY key: that runs in a throwaway home (like 1.x), never in your own opencode.
-if (V1 || process.env.E2E_ACCOUNTS) {
+// E2E_ACCOUNTS connects and signs out a DUMMY key, and E2E_TOOLS adds MCP servers with secrets and starts new chats: they run in a throwaway home (like 1.x), never in your own opencode, whose own MCP servers would also make every start slow.
+if (V1 || process.env.E2E_ACCOUNTS || process.env.E2E_TOOLS) {
   const v1Home = join(work, "v1-home");
   Object.assign(childEnv, { HOME: v1Home, USERPROFILE: v1Home, XDG_CONFIG_HOME: join(v1Home, "c"), XDG_DATA_HOME: join(v1Home, "d"), XDG_STATE_HOME: join(v1Home, "s"), XDG_CACHE_HOME: join(v1Home, "k") });
   for (const name of Object.keys(childEnv)) if (/(_API_KEY|_TOKEN|_SECRET)$/i.test(name)) delete childEnv[name];
@@ -300,10 +300,15 @@ try {
     await sleep(500);
   };
   const dialogText = () => evalPage("(() => { const d = document.querySelector('.monaco-dialog-box'); return d ? d.innerText : null; })()");
-  const inputBox = async (text) => {
+  const inputBox = async (text, downs = 0) => {
     await waitFor("the input box", () => evalPage("!!document.querySelector('.quick-input-widget:not([style*=\"display: none\"]) input')"), 15000);
     await sleep(300);
     if (text !== undefined) await browser.send("Input.insertText", { text }, pageSession);
+    for (let i = 0; i < downs; i++) {
+      await key("rawKeyDown", "ArrowDown", { windowsVirtualKeyCode: 40 });
+      await key("keyUp", "ArrowDown", { windowsVirtualKeyCode: 40 });
+      await sleep(150);
+    }
     await sleep(300);
     await key("rawKeyDown", "Enter", { windowsVirtualKeyCode: 13, text: "\r" });
     await key("keyUp", "Enter", { windowsVirtualKeyCode: 13 });
@@ -401,7 +406,7 @@ try {
   };
 
   // The Tools panel: MCP servers (add, switch off and on, remove), skills and plugins. No model turn.
-  const toolsChecks = async () => {
+  const toolsChecks = async (heavy = false) => {
     await evalWeb("(() => { d.getElementById('toolsBtn').click(); return true; })()");
     const first = await waitFor("the Tools panel", () => evalWeb("(() => { const t = d.getElementById('tools'); const b = d.getElementById('toolsBody'); return !t.hidden && b.querySelector('.tools-section') ? [...b.querySelectorAll('h3')].map(h => h.textContent) : null; })()"), 20000).catch(() => null);
     check("the Tools panel lists accounts, MCP servers, skills and plugins", !!first && first.length === 4 && first[0] === "Accounts" && /^MCP servers/.test(first[1]) && /^Skills \(\d+\)/.test(first[2]) && /^Plugins/.test(first[3]), JSON.stringify(first));
@@ -409,11 +414,22 @@ try {
     const rowOf = (name) => `[...d.querySelectorAll('#toolsBody .session')].find(r => r.querySelector('.session-title').textContent === ${JSON.stringify(name)})`;
     const addMcp = "(() => { [...d.querySelectorAll('#toolsBody .btn')].find(b => /^Add an MCP server/.test(b.textContent)).click(); return true; })()";
     const quoted = (p) => '"' + p + '"';
+    // the button is clicked again when the first click met a panel that was being repainted
+    const openAddMcp = async () => {
+      for (let i = 0; i < 3; i++) {
+        await evalWeb(addMcp);
+        const shown = await waitFor("the first question", () => evalPage("!!document.querySelector('.quick-input-widget:not([style*=\"display: none\"]) input')"), 8000).catch(() => false);
+        if (shown) return;
+      }
+      await shot("41-no-input-box");
+      console.log("no input box after three clicks; quick inputs in the page:", JSON.stringify(await evalPage("[...document.querySelectorAll('.quick-input-widget')].map(w => ({ style: w.getAttribute('style'), text: w.innerText.slice(0, 80) }))")), "| notice:", await evalWeb("d.getElementById('notice').textContent"));
+    };
     // a first attempt that is cancelled at the question
-    await evalWeb(addMcp);
+    await openAddMcp();
     await inputBox(); // the kind: the first choice, a program on this computer
     await inputBox("e2ecancel");
     await inputBox(quoted(process.execPath) + " " + quoted(miniMcp));
+    await inputBox(); // needs variables? the first choice is No
     const mcpQuestion = await waitFor("the MCP question", dialogText, 15000).catch(() => null);
     console.log("mcp question:", JSON.stringify(mcpQuestion));
     check("adding a server asks first, with the exact program and arguments", !!mcpQuestion && /e2ecancel/.test(mcpQuestion) && /Program: /.test(mcpQuestion) && /mini-mcp\.mjs/.test(mcpQuestion) && /with your user's permissions/.test(mcpQuestion), String(mcpQuestion));
@@ -422,10 +438,11 @@ try {
     await sleep(1500);
     check("answering Cancel adds nothing", await evalWeb(`!${rowOf("e2ecancel")}`));
     // and the real one
-    await evalWeb(addMcp);
+    await openAddMcp();
     await inputBox();
     await inputBox("e2eprobe");
     await inputBox(quoted(process.execPath) + " " + quoted(miniMcp));
+    await inputBox(); // needs variables? No
     await clickDialog("Add server");
     const added = await waitFor("the server to connect", () => evalWeb(`(() => { const r = ${rowOf("e2eprobe")}; return r ? { badge: r.querySelector('.badge').textContent, meta: r.querySelector('.session-meta').textContent } : null; })()`), 30000).catch(() => null);
     const connected = await waitFor("connected", () => evalWeb(`(() => { const r = ${rowOf("e2eprobe")}; return r && r.querySelector('.badge').textContent === 'connected'; })()`), 30000).catch(() => false);
@@ -441,6 +458,72 @@ try {
     await evalWeb(`(() => { [...${rowOf("e2eprobe")}.querySelectorAll('.btn')].find(b => b.textContent === 'Remove').click(); return true; })()`);
     const gone = await waitFor("the server to go", () => evalWeb(`!${rowOf("e2eprobe")}`), 20000).catch(() => false);
     check("Remove forgets a server that was added in Capella", !!gone);
+    if (heavy) {
+    // A server given environment variables: the values are typed masked, kept in the keychain and never shown again.
+    const dumpFile = join(work, "mcp-dump.json");
+    const readDump = () => { try { return JSON.parse(readFileSync(dumpFile, "utf8")); } catch { return undefined; } };
+    const TOKEN1 = "tok-first-8841-Qz";
+    const TOKEN2 = "tok-second-5520-Qz";
+    await sleep(1500); // the panel is repainted after the removal: click the button that stays
+    await openAddMcp();
+    await inputBox();
+    await inputBox("e2eenv");
+    await inputBox(quoted(process.execPath) + " " + quoted(miniMcp));
+    await inputBox(undefined, 1); // needs variables? Yes (the second choice)
+    await inputBox(); // add or replace a variable
+    await inputBox("CAPELLA_TEST_DUMP_FILE");
+    await inputBox(dumpFile);
+    await inputBox(); // add another
+    await inputBox("CAPELLA_TEST_VALUE");
+    await inputBox(TOKEN1);
+    await inputBox(undefined, 3); // Done: after add, remove ×2
+    const envQuestion = await waitFor("the question", dialogText, 15000).catch(() => null);
+    console.log("env question:", JSON.stringify(envQuestion));
+    check("the question names the variables and not their values", !!envQuestion && /Environment variables: CAPELLA_TEST_DUMP_FILE, CAPELLA_TEST_VALUE/.test(envQuestion) && !envQuestion.includes(TOKEN1) && /keychain/.test(envQuestion), String(envQuestion));
+    await shot("40-mcp-env-question");
+    await clickDialog("Add server");
+    const upOnce = await waitFor("the server with variables", () => evalWeb(`(() => { const r = ${rowOf("e2eenv")}; return r && r.querySelector('.badge').textContent === 'connected' ? r.querySelector('.session-meta').textContent : null; })()`), 30000).catch(() => null);
+    check("the server started and the variable reached the program", !!upOnce && readDump()?.value === TOKEN1, JSON.stringify({ upOnce, dump: readDump() }));
+    check("the list shows the variable names but not their values", !!upOnce && /env: CAPELLA_TEST_DUMP_FILE, CAPELLA_TEST_VALUE/.test(upOnce) && !upOnce.includes(TOKEN1), String(upOnce));
+
+    // edit: a new value for one variable
+    await evalWeb(`(() => { [...${rowOf("e2eenv")}.querySelectorAll('.btn')].find(b => b.textContent === 'Edit').click(); return true; })()`);
+    await inputBox(undefined, 2); // Environment variables…
+    await inputBox(); // add or replace
+    await inputBox("CAPELLA_TEST_VALUE");
+    await inputBox(TOKEN2);
+    await inputBox(undefined, 3); // Done
+    await inputBox(undefined, 3); // Apply and restart (after the command, the folder and the variables)
+    const editQuestion = await waitFor("the edit question", dialogText, 15000).catch(() => null);
+    check("applying an edit asks first and names what got a new value", !!editQuestion && /Apply the changes to "e2eenv"/.test(editQuestion) && /New values for: CAPELLA_TEST_VALUE/.test(editQuestion) && !editQuestion.includes(TOKEN2), String(editQuestion));
+    await clickDialog("Apply");
+    const edited = await waitFor("the new value", async () => (readDump()?.value === TOKEN2 ? true : null), 30000).catch(() => false);
+    check("after the edit the program was restarted with the new value", !!edited, JSON.stringify(readDump()));
+
+    // Test says how the server answers
+    await evalWeb(`(() => { [...${rowOf("e2eenv")}.querySelectorAll('.btn')].find(b => b.textContent === 'Test').click(); return true; })()`);
+    const tested = await waitFor("the test result", () => evalWeb("(() => { const n = d.getElementById('notice'); return /e2eenv started and answered/.test(n.textContent) ? n.textContent : null; })()"), 30000).catch(() => null);
+    check("Test says the server started and answered", !!tested, String(tested));
+
+    // the secrets are nowhere in the page
+    const pageNow = await evalWeb("d.documentElement.outerHTML + ' ' + d.body.innerText");
+    check("no variable value is anywhere in the page", !pageNow.includes(TOKEN1) && !pageNow.includes(TOKEN2));
+
+    // a new chat starts a new opencode: the server is started again, with its value taken from the keychain
+    rmSync(dumpFile, { force: true }); // so that what is read next was written by the server of the NEW chat
+    await evalWeb("(() => { d.getElementById('toolsClose').click(); d.getElementById('newChat').click(); return true; })()");
+    await sleep(1500);
+    await waitFor("the new chat to be ready", () => evalWeb("/^opencode \\d/.test(d.getElementById('version').textContent)"), 40000);
+    await sleep(2000);
+    await evalWeb("(() => { d.getElementById('toolsBtn').click(); return true; })()");
+    const again = await waitFor("the server in the new chat", () => evalWeb(`(() => { const r = ${rowOf("e2eenv")}; return r && r.querySelector('.badge').textContent === 'connected'; })()`), 120000).catch(() => false);
+    if (!again) console.log("new chat debug:", JSON.stringify(await evalWeb("({ notice: d.getElementById('notice').textContent, rows: [...d.querySelectorAll('#toolsBody .session')].map(r => r.querySelector('.session-title').textContent + ':' + (r.querySelector('.badge') || {}).textContent) })")));
+    check("in a new chat the server is registered again", !!again);
+    check("and it got its secret back from the keychain", readDump()?.value === TOKEN2, JSON.stringify(readDump()));
+    await evalWeb(`(() => { [...${rowOf("e2eenv")}.querySelectorAll('.btn')].find(b => b.textContent === 'Remove').click(); return true; })()`);
+    check("Remove forgets it", !!(await waitFor("gone", () => evalWeb(`!${rowOf("e2eenv")}`), 20000).catch(() => false)));
+    }
+
     await evalWeb("(() => { d.getElementById('toolsClose').click(); return true; })()");
     check("Close hides the panel", await evalWeb("d.getElementById('tools').hidden"));
   };
@@ -500,6 +583,12 @@ try {
     await clickDialog("Cancel");
     await evalWeb("(() => { d.getElementById('toolsClose').click(); return true; })()");
   };
+
+  if (process.env.E2E_TOOLS) {
+    await toolsChecks(true);
+    console.log(failed === 0 ? `[${label}] ALL CHECKS PASSED (tools)` : `[${label}] ${failed} CHECK(S) FAILED (tools)`);
+    throw Object.assign(new Error("tools run finished"), { v1Done: true });
+  }
 
   if (process.env.E2E_ACCOUNTS) {
     await accountsChecks();
@@ -757,7 +846,10 @@ try {
     if (!/red/i.test(seen)) {
       const turns = await evalWeb("d.querySelectorAll('.turn').length");
       await evalWeb("(() => { const i = d.getElementById('input'); i.value = 'Look at the image red.png again. What colour is it? One word.'; i.dispatchEvent(new Event('input')); d.getElementById('send').click(); return true; })()");
-      await waitFor("the second vision turn to end", () => evalWeb(`(() => { const all = [...d.querySelectorAll('.turn')]; const t = all.pop(); return all.length >= ${turns} && !d.querySelector('.turn.live') && !d.getElementById('stop').offsetParent && t && t.querySelector('.md') ? true : false; })()`), 150000);
+      await waitFor("the second vision turn to end", () => evalWeb(`(() => { const all = [...d.querySelectorAll('.turn')]; const t = all.pop(); return all.length >= ${turns} && !d.querySelector('.turn.live') && !d.getElementById('stop').offsetParent && t && t.querySelector('.md') ? true : false; })()`), 150000).catch(async (e) => {
+        console.log("second vision turn did not end; approvals asked:", JSON.stringify(await evalWeb("[...d.querySelectorAll('.approval-card')].map(c => c.innerText.slice(0, 160))")), "| tools:", JSON.stringify(await evalWeb("[...d.querySelectorAll('.turn:last-of-type .step.tool')].map(s => s.innerText.slice(0, 60))")));
+        throw e;
+      });
       seen = await lastAnswer();
       console.log("vision answer (second try):", JSON.stringify(seen));
     }

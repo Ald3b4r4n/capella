@@ -924,7 +924,24 @@ function paintTools(tools: ToolsView): void {
     toggle.type = "button";
     toggle.addEventListener("click", () => post({ type: "mcpToggle", name: server.name, on: !on }));
     actions.append(toggle);
+    const test = el("button", "btn", "Test");
+    test.type = "button";
+    test.title = server.managed ? "Start it again and say how it went" : "Disconnect and connect it again, and say how it went";
+    test.addEventListener("click", () => post({ type: "mcpTest", name: server.name }));
+    actions.append(test);
+    if (server.status === "needs-auth" && server.integrationId) {
+      const signIn = el("button", "btn", "Sign in");
+      signIn.type = "button";
+      signIn.title = "Sign in to this server in your browser (opencode runs it)";
+      signIn.addEventListener("click", () => post({ type: "mcpSignIn", name: server.name }));
+      actions.append(signIn);
+    }
     if (server.managed) {
+      const edit = el("button", "btn", "Edit");
+      edit.type = "button";
+      edit.title = "Change the command or address, its environment variables or headers (values stay hidden)";
+      edit.addEventListener("click", () => post({ type: "mcpEdit", name: server.name }));
+      actions.append(edit);
       const remove = el("button", "btn", "Remove");
       remove.type = "button";
       remove.title = tools.removeForgets ? "Forget this server" : "Disconnect it and stop starting it in new chats (opencode 1.x keeps it listed until it restarts)";
@@ -1378,6 +1395,9 @@ window.addEventListener("message", (e: MessageEvent<ToWebview>) => {
       closeSlash();
       todoCalls.clear();
       todosEl.hidden = true;
+      // what the Tools panel showed belonged to the chat that is gone
+      toolsEl.hidden = true;
+      toolsBody.replaceChildren();
       todosList.replaceChildren();
       paintChips();
       timeline.replaceChildren();
