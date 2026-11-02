@@ -484,7 +484,13 @@ try {
   // Attachments: a pasted image, a dropped file from the open folder, a refused one from outside it, and a real turn with a
   // free vision model that has to see the image.
   const { pathToFileURL } = await import("node:url");
-  const RED_PNG = "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAIAAADYYG7QAAAAQklEQVR4nO3OQQ0AIAwAsYmYf2WIwQXHo0kFdM7uVyYfCAkJCdUDISEhoXogJCQkVA+EhISE6oGQkJBQPRASEnrsAsvRJIjy9ALLAAAAAElFTkSuQmCC";
+  // A 256x256 solid red PNG built here: a 48 px one made some vision models answer "white" or "gray" at random, while the same
+  // image at 256 px was read as red every time (DeepSeek V4.1 Flash, 5 of 5).
+  const { deflateSync } = await import("node:zlib");
+  const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+  const crc32 = (buf) => { let c = 0xffffffff; for (const b of buf) c = crcTable[(c ^ b) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+  const pngChunk = (type, data) => { const len = Buffer.alloc(4); len.writeUInt32BE(data.length); const body = Buffer.concat([Buffer.from(type), data]); const sum = Buffer.alloc(4); sum.writeUInt32BE(crc32(body)); return Buffer.concat([len, body, sum]); };
+  const RED_PNG = (() => { const n = 256; const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(n, 0); ihdr.writeUInt32BE(n, 4); ihdr[8] = 8; ihdr[9] = 2; const row = Buffer.concat([Buffer.from([0]), Buffer.concat(Array.from({ length: n }, () => Buffer.from([220, 20, 30])))]); return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), pngChunk("IHDR", ihdr), pngChunk("IDAT", deflateSync(Buffer.concat(Array.from({ length: n }, () => row)))), pngChunk("IEND", Buffer.alloc(0))]).toString("base64"); })();
   writeFileSync(join(work, "outside.txt"), "not in the open folder\n");
   const withVision = !process.env.E2E_SKIP_VISION; // the vision step needs a model that takes images, and the free ones have a cap
   if (withVision) {
@@ -521,8 +527,18 @@ try {
     check("the sent message shows what went with it, including the image thumbnail", !!sent && sent.length === 2, JSON.stringify(sent));
     check("sending clears the chips", (await evalWeb("d.querySelectorAll('#chips .chip-file').length")) === 0);
     await waitFor("the vision turn to end", () => evalWeb("(() => { const t = [...d.querySelectorAll('.turn')].pop(); return !d.querySelector('.turn.live') && !d.getElementById('stop').offsetParent && t && t.querySelector('.md') ? true : false; })()"), 150000);
-    const seen = await evalWeb("[...[...d.querySelectorAll('.turn')].pop().querySelectorAll('.md')].map(x => x.textContent).join(' ')");
+    const lastAnswer = () => evalWeb("[...[...d.querySelectorAll('.turn')].pop().querySelectorAll('.md')].map(x => x.textContent).join(' ')");
+    let seen = await lastAnswer();
     console.log("vision answer:", JSON.stringify(seen));
+    // A small model can misjudge a flat colour now and then (the same image answered "red" or "white" on different runs),
+    // so one more try in the same chat is allowed: the check is that the image reaches the model, not that the model is perfect.
+    if (!/red/i.test(seen)) {
+      const turns = await evalWeb("d.querySelectorAll('.turn').length");
+      await evalWeb("(() => { const i = d.getElementById('input'); i.value = 'Look at the image red.png again. What colour is it? One word.'; i.dispatchEvent(new Event('input')); d.getElementById('send').click(); return true; })()");
+      await waitFor("the second vision turn to end", () => evalWeb(`(() => { const all = [...d.querySelectorAll('.turn')]; const t = all.pop(); return all.length >= ${turns} && !d.querySelector('.turn.live') && !d.getElementById('stop').offsetParent && t && t.querySelector('.md') ? true : false; })()`), 150000);
+      seen = await lastAnswer();
+      console.log("vision answer (second try):", JSON.stringify(seen));
+    }
     check("the model saw the attached image (it names the colour red)", /red/i.test(seen), seen);
     await shot("19-attachments-answer");
   }

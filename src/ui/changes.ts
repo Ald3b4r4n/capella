@@ -88,18 +88,24 @@ export class ChangeTracker {
     return process.platform === "win32" ? abs.toLowerCase() : abs;
   }
 
-  /** Inside the open folder(s); a file that does not exist yet counts when its nearest existing folder does. */
-  private async allowed(abs: string): Promise<boolean> {
-    if (await insideRoots(abs, this.roots)) return true;
-    // A file opencode is writing at this very moment can fail to resolve for an instant (seen on Windows with a file created
-    // by a tool). It is still inside when it is a plain file directly in a folder that is inside, and refused if it is a link.
+  /** A file that exists: inside when it is not a link and sits in a folder that is inside. Undefined when it is not there. */
+  private async plainFileInside(abs: string): Promise<boolean | undefined> {
     try {
       const entry = await lstat(abs);
       if (entry.isSymbolicLink()) return false;
       return insideRoots(dirname(abs), this.roots);
     } catch {
-      // it does not exist yet: the check below
+      return undefined;
     }
+  }
+
+  /** Inside the open folder(s); a file that does not exist yet counts when its nearest existing folder does. */
+  private async allowed(abs: string): Promise<boolean> {
+    if (await insideRoots(abs, this.roots)) return true;
+    // A file opencode is writing at this very moment can fail to resolve for an instant (seen on Windows with a file created
+    // by a tool). It is still inside when it is a plain file directly in a folder that is inside, and refused if it is a link.
+    const plain = await this.plainFileInside(abs);
+    if (plain !== undefined) return plain;
     let here = abs;
     for (let i = 0; i < 64; i++) {
       try {
@@ -111,13 +117,14 @@ export class ChangeTracker {
         here = parent;
       }
     }
-    // Only a missing file may use this: an existing one outside the roots was refused above.
+    // Only a missing file may use this: an existing one outside the roots was refused above, unless it was created between
+    // the checks (a tool writing it right now): then it is judged as a file that exists.
     try {
       await stat(abs);
-      return false;
     } catch {
       return insideRoots(here, this.roots);
     }
+    return (await this.plainFileInside(abs)) ?? false;
   }
 
   private async snapshot(abs: string): Promise<Snapshot> {

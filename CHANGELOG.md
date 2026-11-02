@@ -9,6 +9,8 @@ From what Antares learned since 0.1.4:
 - **Model list:** read again on request (button) and when opencode announces a catalog, provider or account change; the last good list is kept when a read fails (an empty list counts as a failure), and new or vanished models are reported.
 - **Effort** (the model's own variants) and **web access** (follow the mode, allow, off) controls.
 - **Fix:** the + menu (and any menu opened by a button other than Mode or Model) closed itself the moment it opened.
+- **Fix:** a file a tool created could still be missed in Changes when it appeared between two of the checks that decide whether it is inside the open folder; it is now judged as the existing file it has become.
+- **Fix:** the side panel showed a literal `\n\n` between its last two links.
 - **Fix (1.x):** when a model's free allowance ran out, opencode 1.x kept retrying quietly and the chat looked stuck; the turn now ends as a usage-limit failure and the retry is stopped.
 - **Fix:** a file a tool created could also be missed in Changes when the model wrote its absolute path and the file was still being written (the path could not be resolved for an instant); a plain file directly in an allowed folder is now accepted, and a link is still refused.
 - **Fix:** a file created by a tool within milliseconds of it starting could be missed in Changes (Windows file times tick about every 16 ms).

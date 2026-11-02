@@ -57,7 +57,7 @@
     "viewsWelcome": [
       {
         "view": "capella.launcher",
-        "contents": "Capella, an editor interface for opencode (Zen and Go).\n\n[Open Capella](command:capella.open)\n\n[Show Zen/Go usage](command:capella.showUsage)\n\n[Set up local voice](command:capella.setupVoice)\\n\\n[Compatibility diagnostics](command:capella.diagnostics)"
+        "contents": "Capella, an editor interface for opencode (Zen and Go).\n\n[Open Capella](command:capella.open)\n\n[Show Zen/Go usage](command:capella.showUsage)\n\n[Set up local voice](command:capella.setupVoice)\n\n[Compatibility diagnostics](command:capella.diagnostics)"
       }
     ],
     "commands": [
