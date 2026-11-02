@@ -69,6 +69,7 @@ export class OpencodeSession extends EventEmitter {
   private effortValue?: string;
   private mode: ModeId;
   private webPolicy: WebPolicy = "mode";
+  private extraFolders: string[] = [];
   private readonly announced = new Set<string>();
   private catalogTimer?: NodeJS.Timeout;
 
@@ -104,6 +105,11 @@ export class OpencodeSession extends EventEmitter {
 
   get web(): WebPolicy {
     return this.webPolicy;
+  }
+
+  /** Folders outside the project that the user opened to this chat. */
+  get folders(): readonly string[] {
+    return this.extraFolders;
   }
 
   get effort(): string | undefined {
@@ -222,7 +228,7 @@ export class OpencodeSession extends EventEmitter {
     if (this.sessionId) return this.sessionId;
     const backend = this.requireBackend();
     const model = await this.resolveModel();
-    const id = await backend.createSession(this.mode, model, this.effortValue, this.webPolicy);
+    const id = await backend.createSession(this.mode, model, this.effortValue, this.webPolicy, this.extraFolders);
     this.sessionId = id;
     backend.resetEvents();
     this.model = model;
@@ -302,14 +308,20 @@ export class OpencodeSession extends EventEmitter {
   /** Changes the mode of a live session: the mode's rules replace the session's, and so does the agent. Not during a turn. */
   async setMode(id: ModeId): Promise<void> {
     const mode = modeById(id);
-    if (this.sessionId) await this.requireBackend().applyMode(this.sessionId, mode.id, this.webPolicy);
+    if (this.sessionId) await this.requireBackend().applyMode(this.sessionId, mode.id, this.webPolicy, this.extraFolders);
     this.mode = mode.id;
   }
 
   /** Web access of this chat, laid over the mode's rules. Not during a turn; the caller checks. */
   async setWeb(policy: WebPolicy): Promise<void> {
-    if (this.sessionId) await this.requireBackend().applyMode(this.sessionId, this.mode, policy);
+    if (this.sessionId) await this.requireBackend().applyMode(this.sessionId, this.mode, policy, this.extraFolders);
     this.webPolicy = policy;
+  }
+
+  /** Replaces the folders opened to this chat. The new set takes effect at once on a live session. Not during a turn; the caller checks. */
+  async setFolders(folders: readonly string[]): Promise<void> {
+    if (this.sessionId) await this.requireBackend().applyMode(this.sessionId, this.mode, this.webPolicy, folders);
+    this.extraFolders = [...folders];
   }
 
   /** OpenCode Go allowance and Console budgets. Undefined when not signed in or when this opencode has none (1.x has none). */
@@ -346,7 +358,7 @@ export class OpencodeSession extends EventEmitter {
       this.model = stored;
       this.effortValue = undefined;
     }
-    await backend.applyMode(id, this.mode, this.webPolicy);
+    await backend.applyMode(id, this.mode, this.webPolicy, this.extraFolders);
     if (this.model) await backend.selectModel(id, this.model, this.effortValue);
     const items = await backend.messages(id);
     await this.surfacePendingApprovals();

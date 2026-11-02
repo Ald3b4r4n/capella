@@ -292,3 +292,23 @@ test("the task list the agent keeps arrives as a tool call with its input", asyn
   const started = events.find((e) => e.type === "tool-started");
   assert.equal(started?.type === "tool-started" && started.name, "todowrite");
 });
+
+test("a folder opened to the chat is allowed after the baseline ask: when the session is created, when it changes, and across a mode change", async () => {
+  const { session, events } = make({ mode: "review" });
+  await session.setFolders(["/work/lib"]);
+  await session.send("hi");
+  await until(events, "turn-ended");
+  const bodies = async () => (await (session as unknown as { client: OpencodeClient }).client.get<Array<{ method: string; path: string; body: { permissions?: Array<{ action: string; resource: string; effect: string }> } }>>("/api/calls"));
+  const created = (await bodies()).find((c) => c.method === "POST" && c.path === "/api/session")!;
+  const external = created.body.permissions!.filter((r) => r.action === "external_directory");
+  assert.deepEqual(external.map((r) => `${r.effect}:${r.resource}`), ["ask:*", "allow:/work/lib/*"]);
+  await session.setFolders([]);
+  await session.setMode("accept-edits");
+  const patches = (await bodies()).filter((c) => c.method === "PATCH" && c.path === "/api/session/ses_1");
+  assert.deepEqual(patches.at(-2)!.body.permissions!.filter((r) => r.action === "external_directory").map((r) => `${r.effect}:${r.resource}`), ["ask:*"]);
+  await session.setFolders(["/work/other"]);
+  await session.setMode("review");
+  const last = (await bodies()).filter((c) => c.method === "PATCH" && c.path === "/api/session/ses_1").at(-1)!;
+  assert.deepEqual(last.body.permissions!.filter((r) => r.action === "external_directory").map((r) => `${r.effect}:${r.resource}`), ["ask:*", "allow:/work/other/*"]);
+  assert.deepEqual(session.folders, ["/work/other"]);
+});

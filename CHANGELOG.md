@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3 (unreleased)
+
+- **Add a folder** (+ menu): lets the agent use a folder outside the project in this chat only, after a question that says what it allows. It shows as a removable chip, applies at once to the live session on 2.x and 1.x, and does not carry over to another chat. A drive root, your home folder and the folder above it are refused.
+- **Fix (safety):** the permission modes did not cover folders outside the project: opencode read a file there without asking (measured on 2.2.5). Every mode but Bypass now asks (`external_directory`), and the approval card says "Let the agent use a folder outside the project?".
+- `scripts/check-folders.ts` checks the above against a real opencode (asked, allowed after adding, asked again after removing); `CAPELLA_DEV_ADD_FOLDER` lets a development host used by the e2e name the folder.
+
 ## 0.1.2 (2026-11-02)
 
 The rest of what Antares learned in 0.1.4–0.2.1 and fits opencode:

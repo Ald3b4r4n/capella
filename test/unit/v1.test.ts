@@ -85,10 +85,10 @@ test("the catalog is whitelisted: provider options (which hold the API key) neve
 });
 
 test("1.x rules use its own names", () => {
-  assert.deepEqual(v1Rules(modeById("plan")), [{ permission: "edit", pattern: "*", action: "deny" }, { permission: "bash", pattern: "*", action: "deny" }, { permission: "webfetch", pattern: "*", action: "allow" }, { permission: "websearch", pattern: "*", action: "allow" }]);
+  assert.deepEqual(v1Rules(modeById("plan")), [{ permission: "edit", pattern: "*", action: "deny" }, { permission: "bash", pattern: "*", action: "deny" }, { permission: "webfetch", pattern: "*", action: "allow" }, { permission: "websearch", pattern: "*", action: "allow" }, { permission: "external_directory", pattern: "*", action: "ask" }]);
   // 1.x appends rules and the last match wins: every mode is a complete set, so it can loosen what an earlier one tightened.
-  assert.deepEqual(v1Rules(modeById("bypass")).map((r) => r.action), ["allow", "allow", "allow", "allow"]);
-  assert.deepEqual(v1Rules(modeById("accept-edits")).map((r) => [r.permission, r.action]), [["edit", "allow"], ["bash", "ask"], ["webfetch", "ask"], ["websearch", "ask"]]);
+  assert.deepEqual(v1Rules(modeById("bypass")).map((r) => r.action), ["allow", "allow", "allow", "allow", "allow"]);
+  assert.deepEqual(v1Rules(modeById("accept-edits")).map((r) => [r.permission, r.action]), [["edit", "allow"], ["bash", "ask"], ["webfetch", "ask"], ["websearch", "ask"], ["external_directory", "ask"]]);
 });
 
 test("a stored 1.x chat replays with one answer per question, and subagent sessions are not listed", () => {
@@ -257,4 +257,18 @@ test("on 1.x there is no queue; the palette is the server's command list, skills
   assert.deepEqual(await session.queued(), []);
   const rows = await session.slash();
   assert.deepEqual(rows.map((r) => `${r.kind}:${r.name}`), ["command:review", "skill:pdf"]);
+});
+
+test("on 1.x a folder is appended after the base set, and removing it appends the ask again", async () => {
+  const { session } = make("review");
+  await session.setFolders(["/work/lib"]);
+  await session.send("hi");
+  await new Promise((r) => setTimeout(r, 300));
+  await session.setFolders([]);
+  const calls = await (session as unknown as { client: OpencodeClient }).client.get<Array<{ method: string; path: string; body: { permission?: Array<{ permission: string; pattern: string; action: string }> } }>>("/api/calls");
+  const external = (c: (typeof calls)[number]) => (c.body.permission ?? []).filter((r) => r.permission === "external_directory").map((r) => `${r.action}:${r.pattern}`);
+  const created = calls.find((c) => c.method === "POST" && c.path === "/session")!;
+  assert.deepEqual(external(created), ["ask:*", "allow:/work/lib/*"]);
+  const patch = calls.filter((c) => c.method === "PATCH").at(-1)!;
+  assert.deepEqual(external(patch), ["ask:*"]);
 });

@@ -60,6 +60,7 @@ export function chatHtml(options: ChatHtmlOptions): string {
 <footer class="composer">
   <div class="box">
     <div id="slashMenu" class="slash" role="listbox" aria-label="Commands and skills" hidden></div>
+    <div id="folders" class="chips folders" hidden aria-label="Folders outside the project that this chat may use"></div>
     <div id="queueTray" class="queue-tray" hidden aria-label="Messages waiting for their turn"></div>
     <div id="chips" class="chips" hidden aria-label="Attachments"></div>
     <textarea id="input" rows="1" placeholder="Ask opencode…  (Enter sends, Shift+Enter adds a line; paste or drop images)" aria-label="Message"></textarea>

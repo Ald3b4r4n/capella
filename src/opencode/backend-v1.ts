@@ -89,12 +89,12 @@ export class BackendV1 implements Backend {
     return first ? { providerId: first[0], modelId: first[1] as string } : undefined;
   }
 
-  async createSession(mode: ModeId, model: ModelRef, effort?: string, web: WebPolicy = "mode"): Promise<string> {
+  async createSession(mode: ModeId, model: ModelRef, effort?: string, web: WebPolicy = "mode", folders: readonly string[] = []): Promise<string> {
     const m = modeById(mode);
     this.agent = m.agent;
     this.model = model;
     this.effort = effort;
-    const created = await this.client.post<{ id?: string }>("/session", { title: "Capella", agent: m.agent, model: { id: model.modelId, providerID: model.providerId }, permission: v1Rules(m, web) });
+    const created = await this.client.post<{ id?: string }>("/session", { title: "Capella", agent: m.agent, model: { id: model.modelId, providerID: model.providerId }, permission: v1Rules(m, web, folders) });
     if (!created?.id) throw new Error("opencode did not return a session id");
     return created.id;
   }
@@ -105,10 +105,10 @@ export class BackendV1 implements Backend {
     this.effort = effort;
   }
 
-  async applyMode(sessionId: string, mode: ModeId, web: WebPolicy = "mode"): Promise<void> {
+  async applyMode(sessionId: string, mode: ModeId, web: WebPolicy = "mode", folders: readonly string[] = []): Promise<void> {
     const m = modeById(mode);
     this.agent = m.agent;
-    await this.client.request("PATCH", `/session/${sessionId}`, { body: { permission: v1Rules(m, web) } });
+    await this.client.request("PATCH", `/session/${sessionId}`, { body: { permission: v1Rules(m, web, folders) } });
   }
 
   readonly canQueue = false;

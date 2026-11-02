@@ -60,11 +60,11 @@ export interface Backend {
   /** The user's own default model, identifiers only. */
   defaultModel(): Promise<ModelRef | undefined>;
   /** A new session in the given mode, on the given model. Returns its id. */
-  createSession(mode: ModeId, model: ModelRef, effort?: string, web?: WebPolicy): Promise<string>;
+  createSession(mode: ModeId, model: ModelRef, effort?: string, web?: WebPolicy, folders?: readonly string[]): Promise<string>;
   /** `effort` is one of the model's own variants (`low`, `high`...); undefined is the model's default. */
   selectModel(sessionId: string, model: ModelRef, effort?: string): Promise<void>;
   /** Replaces the permission rules (and agent) of a session with the mode's. */
-  applyMode(sessionId: string, mode: ModeId, web?: WebPolicy): Promise<void>;
+  applyMode(sessionId: string, mode: ModeId, web?: WebPolicy, folders?: readonly string[]): Promise<void>;
   /** Whether a message can be sent while a turn runs (2.x queues and steers; 1.x has no such delivery). */
   readonly canQueue: boolean;
   /** Returns the id the server gave the message (the queue entry), when it gives one. */

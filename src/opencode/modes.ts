@@ -35,7 +35,7 @@ export const MODES: readonly Mode[] = [
     label: "Plan",
     description: "Reads and plans; editing and shell commands are denied (the tools are not even offered to the model).",
     agent: "plan",
-    rules: [all("edit", "deny"), all("shell", "deny")],
+    rules: [all("edit", "deny"), all("shell", "deny"), all("external_directory", "ask")],
     dangerous: false,
     cycles: true,
   },
@@ -44,7 +44,7 @@ export const MODES: readonly Mode[] = [
     label: "Review each change",
     description: "Builds, but asks before every edit, shell command, web fetch and web search.",
     agent: "build",
-    rules: [all("edit", "ask"), all("shell", "ask"), all("webfetch", "ask"), all("websearch", "ask")],
+    rules: [all("edit", "ask"), all("shell", "ask"), all("webfetch", "ask"), all("websearch", "ask"), all("external_directory", "ask")],
     dangerous: false,
     cycles: true,
   },
@@ -53,14 +53,14 @@ export const MODES: readonly Mode[] = [
     label: "Accept edits",
     description: "Edits files in the folder without asking; still asks before shell commands and web access.",
     agent: "build",
-    rules: [all("shell", "ask"), all("webfetch", "ask"), all("websearch", "ask")],
+    rules: [all("shell", "ask"), all("webfetch", "ask"), all("websearch", "ask"), all("external_directory", "ask")],
     dangerous: false,
     cycles: true,
   },
   {
     id: "bypass",
     label: "Bypass permissions",
-    description: "opencode's own default: nothing is asked except .env reads and folders outside the project. Use with care.",
+    description: "opencode's own default: nothing is asked (measured on 2.2.5: even a file outside the project is read without asking). Use with care.",
     agent: "build",
     rules: [],
     dangerous: true,
@@ -79,11 +79,28 @@ export type WebPolicy = "mode" | "allow" | "deny";
 
 const WEB_ACTIONS = ["webfetch", "websearch"];
 
-/** The mode's rules with the web policy laid over them. `mode` changes nothing. */
-export function rulesWith(mode: Mode, web: WebPolicy): Rule[] {
-  if (web === "mode") return mode.rules;
-  const rest = mode.rules.filter((rule) => !WEB_ACTIONS.includes(rule.action));
-  return [...rest, ...WEB_ACTIONS.map((action): Rule => ({ action, resource: "*", effect: web === "deny" ? "deny" : "allow" }))];
+/**
+ * What a folder the user added to a chat is allowed as: the `external_directory` resources opencode asks about are the
+ * folder's path with `/*`, in forward slashes (measured: a file in a subfolder is covered too). On Windows the drive letter
+ * may come in either case, so both are listed; a pattern that fails to match only means opencode asks, never that it allows.
+ */
+export function folderPatterns(path: string): string[] {
+  const slashed = path.split("\\").join("/").replace(/\/+$/, "");
+  const drive = /^([A-Za-z]):(\/.*)?$/.exec(slashed);
+  const forms = drive ? [`${drive[1]!.toLowerCase()}:${drive[2] ?? ""}`, `${drive[1]!.toUpperCase()}:${drive[2] ?? ""}`] : [slashed];
+  return forms.map((form) => `${form}/*`);
+}
+
+/**
+ * The mode's rules with the web policy laid over them, and then the folders the user added to this chat: the last matching
+ * rule wins, so each folder's `allow` comes after the mode's `ask` for everything outside the project. `mode` with no
+ * folders changes nothing.
+ */
+export function rulesWith(mode: Mode, web: WebPolicy, folders: readonly string[] = []): Rule[] {
+  const base = web === "mode" ? mode.rules : [...mode.rules.filter((rule) => !WEB_ACTIONS.includes(rule.action)), ...WEB_ACTIONS.map((action): Rule => ({ action, resource: "*", effect: web === "deny" ? "deny" : "allow" }))];
+  // Bypass asks about nothing, so there is nothing to lift for a folder.
+  if (folders.length === 0 || mode.rules.length === 0) return base;
+  return [...base, ...folders.flatMap((folder) => folderPatterns(folder).map((resource): Rule => ({ action: "external_directory", resource, effect: "allow" })))];
 }
 
 /** A permission rule as opencode 1.x writes it. */
@@ -93,7 +110,7 @@ export interface V1Rule {
   action: Rule["effect"];
 }
 
-const V1_ACTIONS = ["edit", "bash", "webfetch", "websearch"] as const;
+const V1_ACTIONS = ["edit", "bash", "webfetch", "websearch", "external_directory"] as const;
 
 /**
  * The mode's rules for opencode 1.x: same meaning, other names (`shell` is `bash` there; `pattern` instead of
@@ -102,9 +119,22 @@ const V1_ACTIONS = ["edit", "bash", "webfetch", "websearch"] as const;
  * controls, with an explicit `allow` where the mode lets the action through: appended at the end, it overrides whatever
  * an earlier mode left, in both directions (an empty list would change nothing, and Bypass after Plan would stay Plan).
  */
-export function v1Rules(mode: Mode, web: WebPolicy = "mode"): V1Rule[] {
+/**
+ * 1.x writes the resource it asks about with the platform's own separators (measured on Windows: `C:\Users\me\lib\sub\*`), and a forward-slash pattern did not match it, so a Windows folder is
+ * listed in both forms. A pattern that fails to match only means opencode asks, never that it allows.
+ */
+function v1FolderPatterns(path: string): string[] {
+  const forward = folderPatterns(path);
+  if (!path.includes("\\")) return forward;
+  return [...forward, ...forward.map((p) => p.slice(0, -2).split("/").join("\\") + "\\*")];
+}
+
+export function v1Rules(mode: Mode, web: WebPolicy = "mode", folders: readonly string[] = []): V1Rule[] {
   const rules = rulesWith(mode, web);
-  return V1_ACTIONS.map((permission) => ({ permission, pattern: "*", action: rules.find((rule) => (rule.action === "shell" ? "bash" : rule.action) === permission)?.effect ?? "allow" }));
+  const base = V1_ACTIONS.map((permission): V1Rule => ({ permission, pattern: "*", action: rules.find((rule) => (rule.action === "shell" ? "bash" : rule.action) === permission)?.effect ?? "allow" }));
+  // Because 1.x appends, a folder that was removed is covered too: the `ask` for everything comes back after its old `allow`.
+  if (folders.length === 0 || mode.rules.length === 0) return base;
+  return [...base, ...folders.flatMap((folder) => v1FolderPatterns(folder).map((pattern): V1Rule => ({ permission: "external_directory", pattern, action: "allow" })))];
 }
 
 export function modeById(id: string | undefined): Mode {
@@ -120,6 +150,8 @@ export function nextMode(current: ModeId): ModeId {
 
 /** Whether the mode with this id is what an existing session currently has, judging by its agent and rules. */
 export function modeOf(agent: string | undefined, rules: readonly Rule[] | undefined): ModeId | undefined {
+  // Rules about folders outside the project (the baseline ask, and the folders the user added) do not tell the modes apart.
+  const own = (list: readonly Rule[]) => list.filter((rule) => rule.action !== "external_directory");
   const sameRules = (a: readonly Rule[], b: readonly Rule[]) => a.length === b.length && a.every((rule) => b.some((o) => o.action === rule.action && o.resource === rule.resource && o.effect === rule.effect));
-  return MODES.find((mode) => mode.agent === agent && sameRules(mode.rules, rules ?? []))?.id;
+  return MODES.find((mode) => mode.agent === agent && sameRules(own(mode.rules), own(rules ?? [])))?.id;
 }

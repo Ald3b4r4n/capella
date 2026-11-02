@@ -1,4 +1,7 @@
 import { randomBytes } from "node:crypto";
+import { realpath } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, dirname, parse } from "node:path";
 import { appendFileSync } from "node:fs";
 import * as vscode from "vscode";
 import { ChangeTracker } from "./changes.ts";
@@ -6,7 +9,7 @@ import type { OriginalProvider } from "./originalProvider.ts";
 import { buildReport } from "../opencode/diagnostics.ts";
 import { featureFlags } from "../opencode/compat.ts";
 import { describeFree, emptyFreeUsage, recordLimitHit, recordStep, viewFor, type FreeUsageState } from "../opencode/freeUsage.ts";
-import { MAX_ATTACHMENTS, loadAnswerImage, decodeBase64, describeSize, fromBytes, fromSelection, loadFile, type Attachment, type Loaded } from "./attachments.ts";
+import { MAX_ATTACHMENTS, insideRoots, loadAnswerImage, decodeBase64, describeSize, fromBytes, fromSelection, loadFile, type Attachment, type Loaded } from "./attachments.ts";
 import { describeAge } from "../opencode/history.ts";
 import { locateOpencode } from "../opencode/locate.ts";
 import { localPreviewUrl } from "./preview.ts";
@@ -60,6 +63,8 @@ export class ChatPanel {
   /** Ids delivered while their `send` call had not returned yet. */
   private deliveredEarly = new Set<string>();
   private queueSending = 0;
+  /** Folders outside the project that this chat may use (the agent asks about every other one). */
+  private extraFolders: string[] = [];
   private slashCache?: { at: number; entries: SlashEntry[] };
   private readonly disposables: vscode.Disposable[] = [];
 
@@ -191,6 +196,85 @@ export class ChatPanel {
     clearInterval(this.usageTimer);
     this.usageTimer = setInterval(() => void this.tracker.refresh(session), USAGE_POLL_MS);
     return session;
+  }
+
+  private postFolders(): void {
+    this.post({ type: "folders", items: this.extraFolders.map((path) => ({ path, name: basename(path) || path })) });
+  }
+
+  /**
+   * "Add folder": lets the agent use one more folder in this chat without asking about it each time. It is a grant of
+   * access, so it is asked for and explained, the folder is the real one (links resolved), and a whole drive or the home
+   * folder is refused. It lasts for this chat only. (In a development host a test can name the folder through
+   * CAPELLA_DEV_ADD_FOLDER, which also skips the question; a normal editor never reads it.)
+   */
+  private async addFolder(): Promise<void> {
+    const workspace = vscode.workspace.workspaceFolders ?? [];
+    const root = workspace[0]?.uri.fsPath;
+    if (!root) {
+      this.notice("Open a folder first: opencode works inside a project folder.", true);
+      return;
+    }
+    if (this.busy) {
+      this.notice("Wait for the current turn to finish before adding a folder.", true);
+      return;
+    }
+    const session = await this.ensureSession();
+    if (!session) return;
+    const dev = this.context.extensionMode === vscode.ExtensionMode.Development ? process.env.CAPELLA_DEV_ADD_FOLDER : undefined;
+    const picked = dev
+      ? vscode.Uri.file(dev)
+      : (await vscode.window.showOpenDialog({ canSelectMany: false, canSelectFiles: false, canSelectFolders: true, defaultUri: vscode.Uri.file(dirname(root)), openLabel: "Add folder", title: "Add a folder to this chat" }))?.[0];
+    if (!picked) return;
+    let real: string;
+    try {
+      real = await realpath(picked.fsPath);
+    } catch {
+      this.notice(`${picked.fsPath} could not be found.`, true);
+      return;
+    }
+    const fold = (p: string) => (process.platform === "win32" ? p.toLowerCase() : p);
+    if (parse(real).root === real || fold(real) === fold(homedir()) || fold(dirname(homedir())) === fold(real)) {
+      this.notice(`${real} is too broad to give to the agent. Pick the folder of the project or library itself.`, true);
+      return;
+    }
+    if (await insideRoots(real, workspace.map((f) => f.uri.fsPath))) {
+      this.notice(`${real} is already part of the open project.`);
+      return;
+    }
+    if (this.extraFolders.some((f) => fold(f) === fold(real))) {
+      this.notice(`${real} is already added to this chat.`);
+      return;
+    }
+    if (!dev) {
+      const go = "Add folder";
+      const mode = modeById(this.mode);
+      const choice = await vscode.window.showWarningMessage(`Let the agent use ${real}?`, {
+        modal: true,
+        detail: `In this chat the agent will be able to read and list this folder without asking each time${mode.id === "plan" ? "" : " and, where the current mode lets it edit, change files in it"}. Edits and shell commands still follow the mode (${mode.label}).\n\nIt applies to this chat only. Remove it at any time with the x on its chip; \`New chat\` starts without it.`,
+      }, go);
+      if (choice !== go) return;
+    }
+    try {
+      await session.setFolders([...this.extraFolders, real]);
+    } catch (error) {
+      this.notice(`Could not add the folder: ${error instanceof Error ? error.message : String(error)}`, true);
+      return;
+    }
+    this.extraFolders = [...session.folders];
+    this.postFolders();
+    this.notice(`${basename(real)} was added to this chat.`);
+  }
+
+  private async removeFolder(path: string): Promise<void> {
+    if (!this.extraFolders.includes(path) || !this.session) return;
+    if (this.busy) {
+      this.notice("Wait for the current turn to finish before removing a folder.", true);
+      return;
+    }
+    await this.session.setFolders(this.extraFolders.filter((f) => f !== path));
+    this.extraFolders = [...this.session.folders];
+    this.postFolders();
   }
 
   private postQueue(): void {
@@ -451,6 +535,9 @@ export class ChatPanel {
     }
     const session = await this.ensureSession();
     if (!session) return;
+    // Another chat does not inherit the folders opened to this one.
+    await session.setFolders([]);
+    this.extraFolders = [];
     const openId = fork ? await session.fork(id) : id;
     const items = await session.resume(openId);
     const current = session.currentModel;
@@ -579,6 +666,7 @@ export class ChatPanel {
     this.post({ type: "usage", usage: this.tracker.view() });
     this.postModelNote(session);
     this.postQueue();
+    this.postFolders();
   }
 
   private async onMessage(message: FromWebview): Promise<void> {
@@ -593,6 +681,12 @@ export class ChatPanel {
           this.post(result.ok ? { type: "image", src: message.src, uri: result.uri } : { type: "image", src: message.src, error: result.reason });
           break;
         }
+        case "addFolder":
+          await this.addFolder();
+          break;
+        case "removeFolder":
+          await this.removeFolder(message.path);
+          break;
         case "listSlash": {
           const session = await this.ensureSession();
           if (!session) break;
@@ -801,6 +895,7 @@ export class ChatPanel {
     await old?.dispose();
     this.attachments = [];
     this.queue = [];
+    this.extraFolders = [];
     this.slashCache = undefined;
     this.resetChanges();
     this.post({ type: "reset" });

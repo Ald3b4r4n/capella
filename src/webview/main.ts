@@ -26,6 +26,7 @@ const webBtn = $<HTMLButtonElement>("webBtn");
 const voiceStatus = $<HTMLElement>("voiceStatus");
 const slashMenu = $<HTMLElement>("slashMenu");
 const queueTray = $<HTMLElement>("queueTray");
+const foldersEl = $<HTMLElement>("folders");
 const todosEl = $<HTMLDetailsElement>("todos");
 const todosSummary = $<HTMLElement>("todosSummary");
 const todosList = $<HTMLElement>("todosList");
@@ -303,7 +304,7 @@ function toolStep(callId: string, name?: string): HTMLElement {
 function approvalCard(event: Extract<SessionEvent, { type: "approval-requested" }>): void {
   const step = addStep("approval");
   const card = el("div", "approval-card");
-  card.append(el("div", "what", `Allow ${event.action}?`));
+  card.append(el("div", "what", event.action === "external_directory" ? "Let the agent use a folder outside the project?" : `Allow ${event.action}?`));
   const res = el("div", "res");
   res.textContent = event.resources.join("\n") || "(no details)";
   card.append(res);
@@ -812,6 +813,25 @@ function joinMessage(text: string, files: Array<{ name: string; mime: string; th
   scrollToEnd();
 }
 
+// ---- folders outside the project that this chat may use ---------------------------------------------------------------
+
+function paintFolders(items: Array<{ path: string; name: string }>): void {
+  foldersEl.replaceChildren();
+  foldersEl.hidden = items.length === 0;
+  for (const folder of items) {
+    const chip = el("span", "chip-file folder");
+    chip.title = `The agent may use this folder in this chat: ${folder.path}`;
+    chip.append(el("span", "glyph", "\u25a4"), el("span", "fname", folder.name));
+    const remove = el("button", "x", "\u00d7");
+    remove.type = "button";
+    remove.title = `Stop using ${folder.name}`;
+    remove.setAttribute("aria-label", `Remove the folder ${folder.name}`);
+    remove.addEventListener("click", () => post({ type: "removeFolder", path: folder.path }));
+    chip.append(remove);
+    foldersEl.append(chip);
+  }
+}
+
 // ---- the / palette ------------------------------------------------------------------------------------------------
 
 let slashEntries: SlashEntryView[] | undefined;
@@ -949,6 +969,7 @@ function plusMenu(): void {
       ["Add files or photos\u2026", "Choose files from the open folder (text, PNG, JPEG, GIF, WebP)", { type: "pickFiles" }],
       ["Add the current file", "The file open in the editor", { type: "addCurrentFile" }],
       ["Add the selection", "The selected lines, as text", { type: "addSelection" }],
+      ["Add a folder\u2026", "Let the agent use a folder outside the project, in this chat only", { type: "addFolder" }],
     ];
     for (const [label, hint, message] of rows) {
       const item = el("button", "item");
@@ -1139,6 +1160,9 @@ window.addEventListener("message", (e: MessageEvent<ToWebview>) => {
     case "delivered":
       joinMessage(message.text, message.files);
       break;
+    case "folders":
+      paintFolders(message.items);
+      break;
     case "slash":
       slashEntries = message.entries;
       paintSlash();
@@ -1202,6 +1226,7 @@ window.addEventListener("message", (e: MessageEvent<ToWebview>) => {
       web = "mode";
       queueItems = [];
       paintQueue();
+      paintFolders([]);
       slashEntries = undefined;
       slashAsked = false;
       closeSlash();

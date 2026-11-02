@@ -22,6 +22,7 @@ An editor interface for [opencode](https://opencode.ai), with its **Zen** (pay a
 - **Effort** chip for models that have reasoning-effort options, a **Web** chip (follow the mode, always allow, or off for this chat) and a button that reads the model list again; the list also refreshes by itself when opencode says the catalog or your account changed, and a new or vanished model is said in words.
 - **`/` palette:** type `/` in the message box for Capella's own `/new` and `/compact` and the commands and skills your opencode lists (arrows, Enter or Tab to pick). A command runs on the chat; on 2.x a skill rides on the message that invokes it, and on 1.x skills are listed as commands. Text such as a path (`/usr/bin ...`) is still an ordinary message.
 - **Messages while the agent works (2.x):** Enter queues the message (it waits in a tray above the box and joins the same turn when the agent is done with its current work); Ctrl+Enter, or **Send now** on a queued one, hands it over at the agent's next step. A queued message can be removed. opencode 1.x has no queue: Capella says so and waits for the turn.
+- **Outside the project:** every mode except Bypass now asks before the agent reads or changes a folder outside the open project (opencode's own default let it read such a file without asking: measured on 2.2.5). **+ → Add a folder…** lets the agent use one more folder in this chat only, after a question that says what it allows; it shows as a chip you can remove, a whole drive or your home folder is refused, and a new chat starts without it.
 - **Task list:** when the agent keeps a task list (its todo tool), the progress shows above the box, `Tasks 1/3 · the current item`, and is rebuilt when you reopen a chat.
 - **Pictures in answers:** `![alt](path)` shows the picture when it is a PNG, JPEG, GIF or WebP (by its real bytes, up to 5 MB) inside the open folder. A web address is never fetched; it stays a link.
 - The view follows the answer while it streams, stops only when you scroll up yourself, and a jump button brings you back; a finished answer has one **Copy answer** button.
@@ -36,7 +37,8 @@ Zen balance (the API exposes only budgets), undo of changes, voice recording on 
 - With opencode 1.x: attachments, diffs and the preview button, and any version other than 1.19.5.
 - Voice with a real microphone, and the Windows speech engine, inside Capella (the recorder and transcriber were checked with fakes and with synthesized speech).
 - Messages queued while a turn runs, on opencode 1.x (it has no queue; Capella does not send them). The task list was checked with a scripted tool call, not with a model that calls the todo tool by itself.
-- Adding extra folders to a chat and the skills/MCP/plugin managers of Antares are not built yet (adding a folder grants the agent access outside the project, so it needs its own design and confirmation).
+- The skills/MCP/plugin managers of Antares are not built yet.
+- "Add folder" was checked against the real 2.2.5 and 1.19.5 (asked, then allowed, then asked again after removal) and in both editors with the folder given by a test hook; the native folder picker and the confirmation dialog were not clicked through.
 - The voice setup wizard (it runs `pip` and downloads a model) and the "reuse Antares" dialog were not clicked through.
 - A real free-model usage cap: opencode exposes no remaining quota for free models, so Capella keeps its own count and only recognises a cap when the provider refuses a call.
 - macOS and Linux (only Windows was available).

@@ -54,7 +54,10 @@ if (V1) {
   writeFileSync(userSettings, JSON.stringify({ ...JSON.parse(readFileSync(userSettings, "utf8")), "capella.opencodePath": V1 }, null, 2));
 }
 const traceFile = join(work, "trace.log");
-const childEnv = { ...process.env, CAPELLA_TRACE_FILE: traceFile };
+// "Add folder" opens a native dialog and a native question, which a script cannot drive: a development host (this one) takes the folder from here instead.
+const libFolder = join(work, "shared-lib");
+mkdirSync(libFolder, { recursive: true });
+const childEnv = { ...process.env, CAPELLA_TRACE_FILE: traceFile, CAPELLA_DEV_ADD_FOLDER: libFolder };
 if (V1) {
   const v1Home = join(work, "v1-home");
   Object.assign(childEnv, { HOME: v1Home, USERPROFILE: v1Home, XDG_CONFIG_HOME: join(v1Home, "c"), XDG_DATA_HOME: join(v1Home, "d"), XDG_STATE_HOME: join(v1Home, "s"), XDG_CACHE_HOME: join(v1Home, "k") });
@@ -277,7 +280,7 @@ try {
     check("reading the list again says how many models it found", !!again, String(again));
     await evalWeb("(() => { d.getElementById('plusBtn').click(); return true; })()");
     const plus = await waitFor("the + menu", () => evalWeb("(() => { const m = d.getElementById('menu'); return m.hidden ? null : [...m.querySelectorAll('.item span')].map(x => x.textContent); })()"), 5000).catch(() => null);
-    check("the + menu opens and stays open, with the attach choices", !!plus && plus.length === 3 && /current file/.test(plus.join(" ")), JSON.stringify(plus));
+    check("the + menu opens and stays open, with the attach choices", !!plus && plus.length === 4 && /current file/.test(plus.join(" ")), JSON.stringify(plus));
     await evalWeb("(() => { d.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return true; })()");
     await shot("28-controls");
   }
@@ -327,6 +330,20 @@ try {
     check("a picture outside the folder is refused, and a web picture is never loaded", !!pics && pics.failed.length === 1 && /picture not shown/.test(pics.failed[0]) && pics.web === false, JSON.stringify(pics));
     await shot("29-answer-picture");
     await post({ type: "turn-ended", sessionId: "s", outcome: "succeeded" });
+
+    // A folder outside the project, from the + menu: a chip with a remove button; removing it takes the chip away.
+    await evalWeb("(() => { d.getElementById('plusBtn').click(); return true; })()");
+    await waitFor("the + menu", () => evalWeb("!d.getElementById('menu').hidden"), 10000);
+    const hasItem = await evalWeb("[...d.querySelectorAll('#menu .item')].some(i => /^Add a folder/.test(i.querySelector('span').textContent))");
+    check("the + menu offers Add a folder", hasItem);
+    await evalWeb("(() => { [...d.querySelectorAll('#menu .item')].find(i => /^Add a folder/.test(i.querySelector('span').textContent)).click(); return true; })()");
+    const folder = await waitFor("the folder chip", () => evalWeb("(() => { const f = d.getElementById('folders'); return f.hidden ? null : { names: [...f.querySelectorAll('.fname')].map(x => x.textContent), title: f.querySelector('.chip-file').title, notice: d.getElementById('notice').textContent }; })()"), 20000).catch(() => null);
+    console.log("folder chip:", JSON.stringify(folder));
+    check("the folder appears as a chip, named after the folder, and the chat says it was added", !!folder && folder.names.length === 1 && folder.names[0] === "shared-lib" && /shared-lib/.test(folder.title) && /was added/.test(folder.notice), JSON.stringify(folder));
+    await shot("32-folder-chip");
+    await evalWeb("(() => { d.querySelector('#folders .x').click(); return true; })()");
+    const gone = await waitFor("the chip to go", () => evalWeb("d.getElementById('folders').hidden"), 15000).catch(() => false);
+    check("removing the chip takes the folder away", !!gone);
   };
 
   if (process.env.E2E_UI_ONLY) {

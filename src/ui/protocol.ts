@@ -97,6 +97,8 @@ export type ToWebview =
   /** A queued message has just been taken into the turn: it joins the conversation here. */
   | { type: "delivered"; text: string; files?: Array<{ name: string; mime: string; thumb?: string }> }
   | { type: "slash"; entries: SlashEntryView[] }
+  /** Folders outside the project that this chat may use. */
+  | { type: "folders"; items: Array<{ path: string; name: string }> }
   /** An image an answer pointed to, read by the extension (inside the open folder only). */
   | { type: "image"; src: string; uri?: string; error?: string }
   | { type: "fileChange"; change: FileChangeView }
@@ -122,6 +124,8 @@ export type FromWebview =
   | { type: "unqueue"; id: string }
   | { type: "steerNow"; id: string }
   | { type: "listSlash" }
+  | { type: "addFolder" }
+  | { type: "removeFolder"; path: string }
   | { type: "loadImage"; src: string }
   | { type: "stop" }
   | { type: "newChat" }
