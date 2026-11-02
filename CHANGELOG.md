@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.8 (unreleased)
+
+- **Fix:** "Could not start opencode: GET /api/model: HTTP 503 … Location plugins did not finish activating". A server that has just started answers 503 `ServiceUnavailableError` while its plugins and MCP servers come up (seen on a machine with many of them); the chat gave up at the first answer. A request that gets that answer is now repeated after a short wait, for up to a minute, and after 6 seconds the chat says opencode is still starting its plugins instead of looking stuck. Any other error is still an error at once.
+
 ## 0.1.7 (2026-11-02)
 
 - **The browser:** Tools → **Add the browser (Playwright)…** adds Microsoft's Playwright MCP so that the agent can open a page, click, type and take screenshots, which show under its tool card in the chat. A question says it is third-party code, asks which pages it may open (only this computer, or any website) and shows what will run; Capella installs `@playwright/mcp` 0.0.83 (pinned, install scripts off) into its own storage, and starts it headless in a throwaway profile on the installed Edge or Chrome (nothing is downloaded). Every action asks first. Checked in both editors with a real model: install, connection, approvals, a click on a local page, the screenshots, and an outside site refused.

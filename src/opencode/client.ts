@@ -58,6 +58,9 @@ export class SseParser {
   }
 }
 
+/** How long a request waits for a server that is still starting its plugins. */
+export const STARTING_PATIENCE_MS = 60_000;
+
 export interface RequestOptions {
   body?: unknown;
   query?: Record<string, string | undefined>;
@@ -90,7 +93,25 @@ export class OpencodeClient {
     return url.toString();
   }
 
+  /**
+   * A server that has just started can answer 503 `ServiceUnavailableError` ("Location plugins did not finish activating")
+   * while its plugins and servers come up, which can take many seconds on a machine with many of them. Nothing was done by
+   * that answer, so the same request is made again after a short wait, for up to a minute, before it is an error.
+   */
   async request<T = unknown>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
+    const until = Date.now() + STARTING_PATIENCE_MS;
+    for (let wait = 400; ; wait = Math.min(Math.round(wait * 1.5), 3000)) {
+      try {
+        return await this.requestOnce<T>(method, path, options);
+      } catch (error) {
+        const starting = error instanceof ApiError && error.status === 503 && /ServiceUnavailable|did not finish activating/i.test(error.message);
+        if (!starting || Date.now() + wait > until || options.signal?.aborted) throw error;
+        await new Promise((resolve) => setTimeout(resolve, wait));
+      }
+    }
+  }
+
+  private async requestOnce<T>(method: string, path: string, options: RequestOptions): Promise<T> {
     const timeout = AbortSignal.timeout(options.timeoutMs ?? 20000);
     const signal = options.signal ? AbortSignal.any([timeout, options.signal]) : timeout;
     const response = await fetch(this.url(path, options.query), {

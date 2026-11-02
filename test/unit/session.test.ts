@@ -390,3 +390,20 @@ test("a browser sign-in: opencode gives the address and the code, the host polls
   assert.ok((await session.accounts()).find((a) => a.id === "opencode")!.connections.some((c) => c.id === "cred_oauth2"));
   await session.oauthCancel("opencode", code.attemptId);
 });
+
+test("a server whose plugins are still activating (503) is waited for instead of failing the start; any other error is not retried", async () => {
+  process.env.FAKE_MODEL_503 = "3";
+  try {
+    const { session } = make();
+    const began = Date.now();
+    await session.start();
+    assert.equal(session.models.length, 2, "the catalog was read once the server was ready");
+    assert.ok(Date.now() - began >= 400, "it did wait");
+  } finally {
+    delete process.env.FAKE_MODEL_503;
+  }
+  // a 404 is an answer, not "still starting"
+  const { session } = make();
+  await session.start();
+  await assert.rejects((session as unknown as { client: OpencodeClient }).client.get("/api/does-not-exist"), /HTTP 404/);
+});

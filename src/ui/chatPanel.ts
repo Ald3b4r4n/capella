@@ -180,14 +180,23 @@ export class ChatPanel {
     });
     session.on("stderr", (line: string) => this.output.appendLine(line));
     this.session = session;
+    // A machine with many plugins and MCP servers can take a while: say so instead of looking stuck.
+    let slow = false;
+    const slowTimer = setTimeout(() => {
+      slow = true;
+      this.notice("opencode is still starting its plugins and servers. This can take a little while…");
+    }, 6000);
     try {
       await session.start();
+      clearTimeout(slowTimer);
+      if (slow) this.notice("");
       if (!this.model) {
         // Show the model the chat will really use (the user's own opencode default) before the first message.
         const resolved = await session.resolveModel().catch(() => undefined);
         if (resolved) this.model = `${resolved.providerId}/${resolved.modelId}`;
       }
     } catch (error) {
+      clearTimeout(slowTimer);
       this.session = undefined;
       await session.dispose();
       this.startError = error instanceof Error ? error.message : String(error);

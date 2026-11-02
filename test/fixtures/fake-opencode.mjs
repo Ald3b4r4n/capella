@@ -12,6 +12,7 @@ const pending = new Map();
 let session;
 let selected;
 let catalogFails = false;
+let startingAnswers = Number(process.env.FAKE_MODEL_503 ?? 0);
 let catalog = [
   { id: "m1", modelID: "m1", providerID: "opencode", name: "Zen One Free", variants: [{ id: "low" }, { id: "high" }], settings: { apiKey: "SECRET-KEY", baseURL: "https://secret.example" } },
   { id: "m2", modelID: "m2", providerID: "opencode-go", name: "Go Two" },
@@ -131,6 +132,11 @@ const server = createServer(async (req, res) => {
     return json(res, 200, true);
   }
   if (req.method === "GET" && path === "/api/model") {
+    // A server whose plugins are still activating answers 503 for a while (FAKE_MODEL_503 = how many times).
+    if (startingAnswers > 0) {
+      startingAnswers--;
+      return json(res, 503, { _tag: "ServiceUnavailableError", message: "Location plugins did not finish activating", service: "plugin" });
+    }
     if (catalogFails) return json(res, 500, { message: "catalog unavailable" });
     return json(res, 200, { data: catalog });
   }

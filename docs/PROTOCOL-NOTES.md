@@ -4,6 +4,8 @@ Measured against **opencode 2.2.5** on Windows with `scripts/probe-*.ts`. Everyt
 
 ## Starting and authenticating
 
+- **Not ready yet:** right after `serve` prints its address, `GET /api/info` answers but other routes can answer `503 {"_tag":"ServiceUnavailableError","message":"Location plugins did not finish activating","service":"plugin"}` until the plugins (and the MCP servers) of the location are up: a real start took 3.5 to 6 s here and longer under load. That answer does nothing, so Capella repeats the request (400 ms, growing to 3 s, for up to 60 s).
+
 - `opencode serve --port 0 --hostname 127.0.0.1` picks a free port and prints one line: `server listening on http://127.0.0.1:PORT`.
 - With `OPENCODE_SERVER_PASSWORD` set (and optionally `OPENCODE_SERVER_USERNAME`, default `opencode`) the server prints **no** password line and requires HTTP Basic: `401` without it, `200` with it. Without the variable the server generates a password and prints `server password …`. Capella always sets its own, so nothing secret is parsed from output.
 - The npm shim `opencode.cmd` launches `node_modules\@opencode\cli\bin\opencode.exe`. Killing the shim leaves the real server running, so Capella resolves the shim to the executable (`src/opencode/locate.ts`).
