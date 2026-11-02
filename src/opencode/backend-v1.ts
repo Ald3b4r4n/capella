@@ -1,9 +1,9 @@
-import type { Backend, ModelRef, PendingApproval, PromptFile, PromptOptions, SlashEntry } from "./backend.ts";
+import type { Backend, McpConfig, McpServerInfo, McpStatus, ModelRef, PendingApproval, PluginInfo, PromptFile, PromptOptions, SkillInfo, SlashEntry } from "./backend.ts";
 import type { OpencodeClient } from "./client.ts";
 import { familyOf, type MapResult, type ModelInfo } from "./events.ts";
 import { V1EventMapper } from "./events-v1.ts";
 import { mapSessionRowsV1, replayItemsV1, type ReplayItem, type SessionRow } from "./history.ts";
-import { modeById, v1Rules, type ModeId, type WebPolicy } from "./modes.ts";
+import { modeById, v1Rules, type Extras, type ModeId, type WebPolicy } from "./modes.ts";
 import type { UsageSnapshot } from "./usage.ts";
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -89,12 +89,12 @@ export class BackendV1 implements Backend {
     return first ? { providerId: first[0], modelId: first[1] as string } : undefined;
   }
 
-  async createSession(mode: ModeId, model: ModelRef, effort?: string, web: WebPolicy = "mode", folders: readonly string[] = []): Promise<string> {
+  async createSession(mode: ModeId, model: ModelRef, effort?: string, web: WebPolicy = "mode", extras: Extras = {}): Promise<string> {
     const m = modeById(mode);
     this.agent = m.agent;
     this.model = model;
     this.effort = effort;
-    const created = await this.client.post<{ id?: string }>("/session", { title: "Capella", agent: m.agent, model: { id: model.modelId, providerID: model.providerId }, permission: v1Rules(m, web, folders) });
+    const created = await this.client.post<{ id?: string }>("/session", { title: "Capella", agent: m.agent, model: { id: model.modelId, providerID: model.providerId }, permission: v1Rules(m, web, extras) });
     if (!created?.id) throw new Error("opencode did not return a session id");
     return created.id;
   }
@@ -105,10 +105,10 @@ export class BackendV1 implements Backend {
     this.effort = effort;
   }
 
-  async applyMode(sessionId: string, mode: ModeId, web: WebPolicy = "mode", folders: readonly string[] = []): Promise<void> {
+  async applyMode(sessionId: string, mode: ModeId, web: WebPolicy = "mode", extras: Extras = {}): Promise<void> {
     const m = modeById(mode);
     this.agent = m.agent;
-    await this.client.request("PATCH", `/session/${sessionId}`, { body: { permission: v1Rules(m, web, folders) } });
+    await this.client.request("PATCH", `/session/${sessionId}`, { body: { permission: v1Rules(m, web, extras) } });
   }
 
   readonly canQueue = false;
@@ -143,6 +143,42 @@ export class BackendV1 implements Backend {
     const parts = files.map((f) => ({ type: "file", mime: mimeFor(f), url: f.uri, filename: f.name }));
     // The legacy route answers when the command has finished; the turn itself streams as events, so it is not awaited.
     void this.client.request("POST", `/session/${sessionId}/command`, { body: { command: name, arguments: args, model: `${this.model.providerId}/${this.model.modelId}`, agent: this.agent, ...(this.effort ? { variant: this.effort } : {}), ...(parts.length > 0 ? { parts } : {}) }, timeoutMs: 10 * 60 * 1000 }).catch(() => undefined);
+  }
+
+  async mcpList(): Promise<McpServerInfo[]> {
+    const rows = await this.client.get<Record<string, { status?: unknown; error?: unknown }>>("/mcp");
+    return Object.entries(rows ?? {}).map(([name, row]): McpServerInfo => {
+      const raw = typeof row?.status === "string" ? row.status.toLowerCase().split("_").join("-") : "";
+      const status: McpStatus = (["connected", "pending", "disabled", "failed", "needs-auth"] as const).find((s) => s === raw) ?? "unknown";
+      const error = typeof row?.error === "string" ? row.error.replace(/\s+/g, " ").trim().slice(0, 240) : undefined;
+      return { name, status, detail: error ?? (status === "unknown" && raw ? raw : undefined) };
+    });
+  }
+
+  async mcpAdd(name: string, config: McpConfig): Promise<void> {
+    await this.client.post("/mcp", { name, config });
+  }
+
+  async mcpSetEnabled(name: string, on: boolean): Promise<void> {
+    await this.client.post(`/mcp/${encodeURIComponent(name)}/${on ? "connect" : "disconnect"}`);
+  }
+
+  async mcpRemove(name: string): Promise<void> {
+    // 1.x has no way to forget a server: it is disconnected, and gone when opencode restarts.
+    await this.client.post(`/mcp/${encodeURIComponent(name)}/disconnect`);
+  }
+
+  async skills(): Promise<SkillInfo[]> {
+    const rows = await this.client.get<Array<{ name?: unknown; description?: unknown; location?: unknown }>>("/skill");
+    return (Array.isArray(rows) ? rows : []).flatMap((s): SkillInfo[] => (typeof s.name === "string" ? [{ name: s.name, description: typeof s.description === "string" ? s.description : undefined, path: typeof s.location === "string" ? s.location : undefined }] : []));
+  }
+
+  async plugins(): Promise<PluginInfo[]> {
+    const config = await this.client.get<{ plugin?: unknown }>("/config");
+    return (Array.isArray(config?.plugin) ? config.plugin : []).flatMap((p): PluginInfo[] => {
+      const spec = typeof p === "string" ? p : Array.isArray(p) && typeof p[0] === "string" ? p[0] : undefined;
+      return spec ? [{ source: `config: ${spec}`, state: "configured" }] : [];
+    });
   }
 
   async compact(sessionId: string): Promise<void> {

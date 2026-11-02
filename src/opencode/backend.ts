@@ -7,7 +7,7 @@
 import type { Generation } from "./compat.ts";
 import type { MapResult, ModelInfo } from "./events.ts";
 import type { ReplayItem, SessionRow } from "./history.ts";
-import type { ModeId, WebPolicy } from "./modes.ts";
+import type { Extras, ModeId, WebPolicy } from "./modes.ts";
 import type { UsageSnapshot } from "./usage.ts";
 
 export interface ModelRef {
@@ -40,6 +40,32 @@ export interface SlashEntry {
   id?: string;
 }
 
+/** How an MCP server is doing, in opencode's words reduced to a few. */
+export type McpStatus = "connected" | "pending" | "disabled" | "failed" | "needs-auth" | "unknown";
+
+export interface McpServerInfo {
+  name: string;
+  status: McpStatus;
+  /** The error when it failed, trimmed. */
+  detail?: string;
+}
+
+/** What Capella can add: a program to start, or a server to reach. Secrets (headers, environment) are not handled here. */
+export type McpConfig = { type: "local"; command: string[] } | { type: "remote"; url: string };
+
+export interface SkillInfo {
+  name: string;
+  description?: string;
+  /** Where its SKILL.md is, when opencode says (a built-in one has no file). */
+  path?: string;
+}
+
+export interface PluginInfo {
+  id?: string;
+  source: string;
+  state: string;
+}
+
 export interface PendingApproval {
   id: string;
   sessionId: string;
@@ -60,11 +86,11 @@ export interface Backend {
   /** The user's own default model, identifiers only. */
   defaultModel(): Promise<ModelRef | undefined>;
   /** A new session in the given mode, on the given model. Returns its id. */
-  createSession(mode: ModeId, model: ModelRef, effort?: string, web?: WebPolicy, folders?: readonly string[]): Promise<string>;
+  createSession(mode: ModeId, model: ModelRef, effort?: string, web?: WebPolicy, extras?: Extras): Promise<string>;
   /** `effort` is one of the model's own variants (`low`, `high`...); undefined is the model's default. */
   selectModel(sessionId: string, model: ModelRef, effort?: string): Promise<void>;
   /** Replaces the permission rules (and agent) of a session with the mode's. */
-  applyMode(sessionId: string, mode: ModeId, web?: WebPolicy, folders?: readonly string[]): Promise<void>;
+  applyMode(sessionId: string, mode: ModeId, web?: WebPolicy, extras?: Extras): Promise<void>;
   /** Whether a message can be sent while a turn runs (2.x queues and steers; 1.x has no such delivery). */
   readonly canQueue: boolean;
   /** Returns the id the server gave the message (the queue entry), when it gives one. */
@@ -79,6 +105,14 @@ export interface Backend {
   runCommand(sessionId: string, name: string, args: string, files: readonly PromptFile[]): Promise<void>;
   /** Asks the server to summarise the conversation to free context. */
   compact(sessionId: string): Promise<void>;
+  mcpList(): Promise<McpServerInfo[]>;
+  /** Registers a server for this running opencode only (it is gone when the server restarts) and connects it. */
+  mcpAdd(name: string, config: McpConfig): Promise<void>;
+  mcpSetEnabled(name: string, on: boolean): Promise<void>;
+  /** 2.x forgets the server; 1.x can only disconnect it. */
+  mcpRemove(name: string): Promise<void>;
+  skills(): Promise<SkillInfo[]>;
+  plugins(): Promise<PluginInfo[]>;
   interrupt(sessionId: string): Promise<void>;
   reply(sessionId: string, requestId: string, decision: "once" | "always" | "reject", message?: string): Promise<void>;
   pending(): Promise<PendingApproval[]>;

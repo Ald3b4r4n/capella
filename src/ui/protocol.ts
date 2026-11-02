@@ -86,6 +86,25 @@ export interface SlashEntryView {
   description?: string;
 }
 
+/** One MCP server in the Tools panel. */
+export interface McpRowView {
+  name: string;
+  status: "connected" | "pending" | "disabled" | "failed" | "needs-auth" | "unknown";
+  detail?: string;
+  /** Added through Capella: it can be removed here (and is started again in every chat of this project). */
+  managed: boolean;
+  /** What a managed server runs or reaches, so that it is never a mystery. */
+  summary?: string;
+}
+
+export interface ToolsView {
+  mcp: McpRowView[];
+  skills: Array<{ name: string; description?: string; openable: boolean }>;
+  plugins: Array<{ source: string; state: string }>;
+  /** 1.x cannot forget a server: removing only disconnects it. */
+  removeForgets: boolean;
+}
+
 /** Messages the extension sends to the page. Plain data only: nothing here carries a secret. */
 export type ToWebview =
   | { type: "init"; version?: string; workspace: string; modes: ModeRow[]; mode: string; models: ModelRow[]; model?: string; features?: { history: boolean } }
@@ -97,6 +116,7 @@ export type ToWebview =
   /** A queued message has just been taken into the turn: it joins the conversation here. */
   | { type: "delivered"; text: string; files?: Array<{ name: string; mime: string; thumb?: string }> }
   | { type: "slash"; entries: SlashEntryView[] }
+  | { type: "tools"; tools: ToolsView }
   /** Folders outside the project that this chat may use. */
   | { type: "folders"; items: Array<{ path: string; name: string }> }
   /** An image an answer pointed to, read by the extension (inside the open folder only). */
@@ -124,6 +144,11 @@ export type FromWebview =
   | { type: "unqueue"; id: string }
   | { type: "steerNow"; id: string }
   | { type: "listSlash" }
+  | { type: "listTools" }
+  | { type: "mcpToggle"; name: string; on: boolean }
+  | { type: "mcpAdd" }
+  | { type: "mcpRemove"; name: string }
+  | { type: "openSkill"; name: string }
   | { type: "addFolder" }
   | { type: "removeFolder"; path: string }
   | { type: "loadImage"; src: string }

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { realpath } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, parse } from "node:path";
+import { basename, dirname, isAbsolute, parse } from "node:path";
 import { appendFileSync } from "node:fs";
 import * as vscode from "vscode";
 import { ChangeTracker } from "./changes.ts";
@@ -17,7 +17,9 @@ import { extractLocalUrls, isPreviewableUrl, startPreviewServer, type PreviewSer
 import { MODES, DEFAULT_MODE, modeById, type ModeId } from "../opencode/modes.ts";
 import { OpencodeSession, type SessionEvent } from "../opencode/session.ts";
 import { chatHtml } from "./chatHtml.ts";
-import type { AttachmentView, FromWebview, ModeRow, ModelRow, QueueItemView, SlashEntryView, ToWebview } from "./protocol.ts";
+import type { AttachmentView, FromWebview, McpRowView, ModeRow, ModelRow, QueueItemView, SlashEntryView, ToolsView, ToWebview } from "./protocol.ts";
+import type { McpConfig } from "../opencode/backend.ts";
+import { parseCommandLine, validMcpName, validMcpUrl, describeMcp } from "./mcpInput.ts";
 import type { Delivery, SlashEntry } from "../opencode/backend.ts";
 import type { UpdateMonitor } from "./updateMonitor.ts";
 import { VoiceBridge } from "./voiceBridge.ts";
@@ -191,11 +193,114 @@ export class ChatPanel {
     const compat = session.compat;
     if (compat && (compat.status === "broken" || compat.status === "unsupported")) this.notice(compat.summary + " See \"Capella: Compatibility diagnostics\".", true);
     else if (compat && compat.status === "degraded") this.notice(compat.summary);
+    void this.registerStoredMcp(session);
     void this.updates.check(session.version);
     void this.tracker.refresh(session, true);
     clearInterval(this.usageTimer);
     this.usageTimer = setInterval(() => void this.tracker.refresh(session), USAGE_POLL_MS);
     return session;
+  }
+
+  /** MCP servers added through Capella, kept in this project's own storage (never in a settings file a repository could carry). */
+  private storedMcp(): Array<{ name: string; config: McpConfig }> {
+    return this.context.workspaceState.get<Array<{ name: string; config: McpConfig }>>("capella.mcp", []).filter((s) => validMcpName(s.name));
+  }
+
+  /** opencode forgets servers added at runtime when it restarts: the ones the user added are registered again for each chat. */
+  private async registerStoredMcp(session: OpencodeSession): Promise<void> {
+    const stored = this.storedMcp();
+    if (stored.length === 0) return;
+    const have = new Set((await session.mcpList().catch(() => [])).map((s) => s.name));
+    for (const server of stored) {
+      if (have.has(server.name)) continue;
+      await session.mcpAdd(server.name, server.config).catch((error) => this.output.appendLine(`MCP ${server.name}: ${error instanceof Error ? error.message : String(error)}`));
+    }
+  }
+
+  private async toolsView(session: OpencodeSession): Promise<ToolsView> {
+    const stored = new Map(this.storedMcp().map((s) => [s.name, s.config]));
+    const [servers, skills, plugins] = await Promise.all([session.mcpList().catch(() => []), session.skills(), session.plugins()]);
+    const mcp: McpRowView[] = servers.map((s) => ({ name: s.name, status: s.status, detail: s.detail, managed: stored.has(s.name), summary: stored.has(s.name) ? describeMcp(stored.get(s.name)!) : undefined }));
+    const openable = await Promise.all(skills.map(async (s) => !!s.path && isAbsolute(s.path) && (await stat(s.path).then((i) => i.isFile()).catch(() => false))));
+    return { mcp, skills: skills.map((s, i) => ({ name: s.name, description: s.description, openable: openable[i]! })), plugins: plugins.map((p) => ({ source: p.source, state: p.state })), removeForgets: session.generation === "v2" };
+  }
+
+  private async postTools(): Promise<void> {
+    const session = await this.ensureSession();
+    if (session) this.post({ type: "tools", tools: await this.toolsView(session) });
+  }
+
+  /**
+   * "Add MCP server": starting a program or reaching a server is a grant like no other, so the user types the name and the
+   * command or address, sees exactly what will run, and has to confirm. It is kept for this project (registered again in
+   * each chat) and removable.
+   */
+  private async addMcp(): Promise<void> {
+    if (this.busy) {
+      this.notice("Wait for the current turn to finish before adding a server.", true);
+      return;
+    }
+    const session = await this.ensureSession();
+    if (!session) return;
+    const existing = new Set((await session.mcpList().catch(() => [])).map((s) => s.name));
+    let name: string | undefined;
+    let config: McpConfig | undefined;
+    {
+      const kind = await vscode.window.showQuickPick(
+        [
+          { label: "A program on this computer", description: "local", detail: "Capella starts it (for example: npx -y some-mcp-server) and talks to it over standard input and output.", remote: false },
+          { label: "A server on the web", description: "remote", detail: "Capella connects to its address. What the agent sends to its tools goes to that server.", remote: true },
+        ],
+        { title: "Add an MCP server", placeHolder: "What kind of server is it?" },
+      );
+      if (!kind) return;
+      name = await vscode.window.showInputBox({ title: "Name of the server", prompt: "Letters, digits, - and _ (the agent sees its tools as name_tool)", validateInput: (v) => (!validMcpName(v) ? "Use 1 to 40 letters, digits, - or _." : existing.has(v) ? "There is a server with this name already." : undefined) });
+      if (!name) return;
+      if (kind.remote) {
+        const url = await vscode.window.showInputBox({ title: "Address of the server", prompt: "https://… (http is accepted only for this computer)", validateInput: (v) => (validMcpUrl(v) ? undefined : "Use an https:// address, or http://localhost / 127.0.0.1.") });
+        if (!url) return;
+        config = { type: "remote", url: url.trim() };
+      } else {
+        const line = await vscode.window.showInputBox({ title: "Command that starts the server", prompt: "The program and its arguments, as you would type them. No shell is used.", placeHolder: "npx -y @modelcontextprotocol/server-everything", validateInput: (v) => (parseCommandLine(v).length === 0 ? "Type the command." : undefined) });
+        if (!line) return;
+        config = { type: "local", command: parseCommandLine(line) };
+      }
+      const go = "Add server";
+      const choice = await vscode.window.showWarningMessage(`Add the MCP server "${name}"?`, {
+        modal: true,
+        detail: `${describeMcp(config, true)}\n\n${config.type === "local" ? "This program runs on your computer with your user's permissions, now and every time a chat opens in this project." : "The agent will send what it passes to this server's tools to that address."}\nIts tools are asked about before they run (except in Bypass mode). Remove it at any time in Tools.`,
+      }, go);
+      if (choice !== go) return;
+    }
+    if (!name || !config || !validMcpName(name) || existing.has(name)) {
+      this.notice("That server could not be added: the name is invalid or already used.", true);
+      return;
+    }
+    if (config.type === "remote" && !validMcpUrl(config.url)) {
+      this.notice("That address is not accepted: use https://, or http:// for this computer.", true);
+      return;
+    }
+    try {
+      await session.mcpAdd(name, config);
+    } catch (error) {
+      this.notice(`Could not add the server: ${error instanceof Error ? error.message : String(error)}`, true);
+      return;
+    }
+    await this.context.workspaceState.update("capella.mcp", [...this.storedMcp().filter((s) => s.name !== name), { name, config }]);
+    this.notice(`MCP server ${name} added. It may take a few seconds to connect.`);
+    setTimeout(() => void this.postTools(), 2500);
+    await this.postTools();
+  }
+
+  private async openSkill(name: string): Promise<void> {
+    const session = this.session;
+    if (!session) return;
+    const skill = (await session.skills()).find((s) => s.name === name);
+    if (!skill?.path || !isAbsolute(skill.path) || !(await stat(skill.path).then((i) => i.isFile()).catch(() => false))) {
+      this.notice("This skill has no file on disk to open.", true);
+      return;
+    }
+    await vscode.window.showTextDocument(vscode.Uri.file(skill.path), { preview: true });
   }
 
   private postFolders(): void {
@@ -205,8 +310,8 @@ export class ChatPanel {
   /**
    * "Add folder": lets the agent use one more folder in this chat without asking about it each time. It is a grant of
    * access, so it is asked for and explained, the folder is the real one (links resolved), and a whole drive or the home
-   * folder is refused. It lasts for this chat only. (In a development host a test can name the folder through
-   * CAPELLA_DEV_ADD_FOLDER, which also skips the question; a normal editor never reads it.)
+   * folder is refused. It lasts for this chat only. (A development host's test can name the folder through
+   * CAPELLA_DEV_ADD_FOLDER instead of the system's folder picker, which a script cannot drive; the question is asked all the same.)
    */
   private async addFolder(): Promise<void> {
     const workspace = vscode.workspace.workspaceFolders ?? [];
@@ -246,7 +351,7 @@ export class ChatPanel {
       this.notice(`${real} is already added to this chat.`);
       return;
     }
-    if (!dev) {
+    {
       const go = "Add folder";
       const mode = modeById(this.mode);
       const choice = await vscode.window.showWarningMessage(`Let the agent use ${real}?`, {
@@ -681,6 +786,30 @@ export class ChatPanel {
           this.post(result.ok ? { type: "image", src: message.src, uri: result.uri } : { type: "image", src: message.src, error: result.reason });
           break;
         }
+        case "listTools":
+          await this.postTools();
+          break;
+        case "mcpToggle":
+          if (this.session && validMcpName(message.name)) await this.session.mcpSetEnabled(message.name, message.on).catch((e) => this.notice(e instanceof Error ? e.message : String(e), true));
+          setTimeout(() => void this.postTools(), 1500);
+          await this.postTools();
+          break;
+        case "mcpAdd":
+          await this.addMcp();
+          break;
+        case "mcpRemove": {
+          const stored = this.storedMcp().find((s) => s.name === message.name);
+          if (!stored || !this.session) break;
+          await this.session.mcpRemove(stored.name).catch((e) => this.notice(e instanceof Error ? e.message : String(e), true));
+          await this.context.workspaceState.update("capella.mcp", this.storedMcp().filter((s) => s.name !== stored.name));
+          // The rules no longer need to name it.
+          await this.session.setFolders(this.session.folders).catch(() => undefined);
+          await this.postTools();
+          break;
+        }
+        case "openSkill":
+          await this.openSkill(message.name);
+          break;
         case "addFolder":
           await this.addFolder();
           break;

@@ -194,7 +194,7 @@ test("changing the mode on 1.x patches the rules and switches the agent for the 
   await until(events, "turn-ended", 2);
   const all = await calls(session);
   const patch = all.find((c) => c.method === "PATCH");
-  assert.deepEqual(patch?.body.permission, v1Rules(modeById("accept-edits")));
+  assert.deepEqual(patch?.body.permission, v1Rules(modeById("accept-edits"), "mode", { mcp: ["docs"] }));
   const second = all.filter((c) => c.path.endsWith("/prompt_async"))[1];
   assert.equal(second?.body.agent, "build");
   assert.deepEqual(second?.body.model, { providerID: "opencode-go", modelID: "m2" });
@@ -217,7 +217,7 @@ test("stored chats on 1.x: list, resume under the current mode, fork", async () 
   assert.deepEqual(session.currentModel, { providerId: "opencode-go", modelId: "m2" });
   assert.deepEqual(items.map((i) => i.kind), ["user", "assistant"]);
   const patch = (await calls(session)).find((c) => c.method === "PATCH" && c.path === "/session/ses_old");
-  assert.deepEqual(patch?.body.permission, v1Rules(modeById("plan")), "the stored chat gets this chat's rules, whatever it had");
+  assert.deepEqual(patch?.body.permission, v1Rules(modeById("plan"), "mode", { mcp: ["docs"] }), "the stored chat gets this chat's rules, whatever it had");
   assert.equal(await session.fork("ses_old"), "ses_fork");
 });
 
@@ -271,4 +271,18 @@ test("on 1.x a folder is appended after the base set, and removing it appends th
   assert.deepEqual(external(created), ["ask:*", "allow:/work/lib/*"]);
   const patch = calls.filter((c) => c.method === "PATCH").at(-1)!;
   assert.deepEqual(external(patch), ["ask:*"]);
+});
+
+test("on 1.x: MCP servers are listed by name, added, switched off and 'removed' by disconnecting; skills come from /skill and plugins from the config", async () => {
+  const { session } = make("review");
+  await session.start();
+  assert.deepEqual(await session.mcpList(), [{ name: "docs", status: "connected", detail: undefined }]);
+  await session.mcpAdd("probe", { type: "remote", url: "https://example.com/mcp" });
+  assert.deepEqual((await session.mcpList()).map((s) => s.name), ["docs", "probe"]);
+  await session.mcpSetEnabled("probe", false);
+  assert.equal((await session.mcpList()).find((s) => s.name === "probe")!.status, "disabled");
+  await session.mcpRemove("probe");
+  assert.equal((await session.mcpList()).find((s) => s.name === "probe")!.status, "disabled");
+  assert.deepEqual((await session.skills()).map((s) => [s.name, s.path]), [["pdf", "/skills/pdf/SKILL.md"]]);
+  assert.deepEqual(await session.plugins(), [{ source: "config: some-plugin@1.2.3", state: "configured" }, { source: "config: other-plugin", state: "configured" }]);
 });

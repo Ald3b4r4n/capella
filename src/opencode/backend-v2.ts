@@ -1,8 +1,8 @@
-import type { Backend, ModelRef, PendingApproval, PromptFile, PromptOptions, SlashEntry } from "./backend.ts";
+import type { Backend, McpConfig, McpServerInfo, McpStatus, ModelRef, PendingApproval, PluginInfo, PromptFile, PromptOptions, SkillInfo, SlashEntry } from "./backend.ts";
 import { ApiError, type OpencodeClient } from "./client.ts";
 import { mapFrame, mapModels, parseFrame, type MapResult, type ModelInfo } from "./events.ts";
 import { mapSessionRows, replayItems, type ReplayItem, type SessionRow } from "./history.ts";
-import { modeById, rulesWith, type ModeId, type WebPolicy } from "./modes.ts";
+import { modeById, rulesWith, type Extras, type ModeId, type WebPolicy } from "./modes.ts";
 import { mapUsageLimits, type UsageSnapshot } from "./usage.ts";
 
 /** opencode 2.x: the `/api/*` routes, as measured on 2.2.5 (docs/PROTOCOL-NOTES.md). */
@@ -36,9 +36,9 @@ export class BackendV2 implements Backend {
     return typeof modelId === "string" && typeof providerId === "string" ? { providerId, modelId } : undefined;
   }
 
-  async createSession(mode: ModeId, model: ModelRef, effort?: string, web: WebPolicy = "mode", folders: readonly string[] = []): Promise<string> {
+  async createSession(mode: ModeId, model: ModelRef, effort?: string, web: WebPolicy = "mode", extras: Extras = {}): Promise<string> {
     const m = modeById(mode);
-    const created = await this.client.post<{ data?: { id?: string } }>("/api/session", { title: "Capella", agent: m.agent, permissions: rulesWith(m, web, folders) });
+    const created = await this.client.post<{ data?: { id?: string } }>("/api/session", { title: "Capella", agent: m.agent, permissions: rulesWith(m, web, extras) });
     const id = created?.data?.id;
     if (!id) throw new Error("opencode did not return a session id");
     await this.selectModel(id, model, effort);
@@ -49,9 +49,9 @@ export class BackendV2 implements Backend {
     await this.client.post(`/api/session/${sessionId}/model`, { model: { id: model.modelId, providerID: model.providerId, ...(effort ? { variant: effort } : {}) } });
   }
 
-  async applyMode(sessionId: string, mode: ModeId, web: WebPolicy = "mode", folders: readonly string[] = []): Promise<void> {
+  async applyMode(sessionId: string, mode: ModeId, web: WebPolicy = "mode", extras: Extras = {}): Promise<void> {
     const m = modeById(mode);
-    await this.client.request("PATCH", `/api/session/${sessionId}`, { body: { permissions: rulesWith(m, web, folders) } });
+    await this.client.request("PATCH", `/api/session/${sessionId}`, { body: { permissions: rulesWith(m, web, extras) } });
     await this.client.post(`/api/session/${sessionId}/agent`, { agent: m.agent });
   }
 
@@ -96,6 +96,44 @@ export class BackendV2 implements Backend {
 
   async compact(sessionId: string): Promise<void> {
     await this.client.post(`/api/session/${sessionId}/compact`, {});
+  }
+
+  async mcpList(): Promise<McpServerInfo[]> {
+    const rows = await this.client.get<{ data?: Array<{ name?: unknown; status?: { status?: unknown; error?: unknown } }> }>("/api/mcp");
+    return (rows?.data ?? []).flatMap((row): McpServerInfo[] => {
+      if (typeof row.name !== "string") return [];
+      const raw = typeof row.status?.status === "string" ? row.status.status.toLowerCase().split("_").join("-") : "";
+      const status: McpStatus = (["connected", "pending", "disabled", "failed", "needs-auth"] as const).find((s) => s === raw) ?? "unknown";
+      const error = typeof row.status?.error === "string" ? row.status.error.replace(/\s+/g, " ").trim().slice(0, 240) : undefined;
+      return [{ name: row.name, status, detail: error ?? (status === "unknown" && raw ? raw : undefined) }];
+    });
+  }
+
+  async mcpAdd(name: string, config: McpConfig): Promise<void> {
+    await this.client.request("PUT", `/api/experimental/mcp/${encodeURIComponent(name)}`, { body: { config } });
+  }
+
+  async mcpSetEnabled(name: string, on: boolean): Promise<void> {
+    await this.client.post(`/api/experimental/mcp/${encodeURIComponent(name)}/${on ? "connect" : "disconnect"}`);
+  }
+
+  async mcpRemove(name: string): Promise<void> {
+    await this.client.request("DELETE", `/api/experimental/mcp/${encodeURIComponent(name)}`);
+  }
+
+  async skills(): Promise<SkillInfo[]> {
+    const rows = await this.client.get<{ data?: Array<{ name?: unknown; description?: unknown; path?: unknown }> }>("/api/skill");
+    return (rows?.data ?? []).flatMap((s): SkillInfo[] => (typeof s.name === "string" ? [{ name: s.name, description: typeof s.description === "string" ? s.description : undefined, path: typeof s.path === "string" ? s.path : undefined }] : []));
+  }
+
+  async plugins(): Promise<PluginInfo[]> {
+    const rows = await this.client.get<{ data?: Array<{ id?: unknown; source?: { type?: unknown; name?: unknown; spec?: unknown; path?: unknown }; state?: { status?: unknown } }> }>("/api/plugin");
+    return (rows?.data ?? []).flatMap((p): PluginInfo[] => {
+      const type = typeof p.source?.type === "string" ? p.source.type : "unknown";
+      if (type === "builtin") return [];
+      const where = [p.source?.name, p.source?.spec, p.source?.path].find((v): v is string => typeof v === "string");
+      return [{ id: typeof p.id === "string" ? p.id : undefined, source: where ? `${type}: ${where}` : type, state: typeof p.state?.status === "string" ? p.state.status : "unknown" }];
+    });
   }
 
   async interrupt(sessionId: string): Promise<void> {

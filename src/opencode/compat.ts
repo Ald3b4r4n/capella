@@ -35,6 +35,8 @@ export const CAPABILITIES: readonly Capability[] = [
   { id: "usageLimits", label: "OpenCode Go usage and Console budgets", essential: false, routes: [r("GET", "/api/experimental/usage/limits")] },
   { id: "queue", label: "Messages queued while the agent works", essential: false, routes: [r("GET", "/api/session/{sessionID}/inbox"), r("PATCH", "/api/session/{sessionID}/inbox/{inboxID}"), r("DELETE", "/api/session/{sessionID}/inbox/{inboxID}")] },
   { id: "commands", label: "/ palette: commands, skills and compaction", essential: false, routes: [r("GET", "/api/command"), r("GET", "/api/skill"), r("POST", "/api/session/{sessionID}/command"), r("POST", "/api/session/{sessionID}/compact")] },
+  { id: "mcp", label: "MCP servers: list, add, switch on and off, remove", essential: false, routes: [r("GET", "/api/mcp"), r("PUT", "/api/experimental/mcp/{server}"), r("DELETE", "/api/experimental/mcp/{server}"), r("POST", "/api/experimental/mcp/{server}/connect"), r("POST", "/api/experimental/mcp/{server}/disconnect")] },
+  { id: "plugins", label: "Plugins list", essential: false, routes: [r("GET", "/api/plugin")] },
 ];
 
 export type Generation = "v2" | "v1" | "unknown";
@@ -54,6 +56,8 @@ export const CAPABILITIES_V1: readonly Capability[] = [
   { id: "defaultModel", label: "Your default model", essential: false, routes: [r("GET", "/config")] },
   { id: "history", label: "Stored chats (list, continue, fork)", essential: false, routes: [r("GET", "/session"), r("GET", "/session/{sessionID}"), r("POST", "/session/{sessionID}/fork")] },
   { id: "commands", label: "/ palette: commands, skills and compaction", essential: false, routes: [r("GET", "/command"), r("POST", "/session/{sessionID}/command"), r("POST", "/session/{sessionID}/summarize")] },
+  { id: "mcp", label: "MCP servers: list, add, switch on and off", essential: false, routes: [r("GET", "/mcp"), r("POST", "/mcp"), r("POST", "/mcp/{name}/connect"), r("POST", "/mcp/{name}/disconnect")] },
+  { id: "skills", label: "Skills list", essential: false, routes: [r("GET", "/skill")] },
 ];
 
 const METHODS = new Set(["get", "post", "put", "patch", "delete"]);

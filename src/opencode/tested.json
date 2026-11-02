@@ -1,14 +1,17 @@
 {
   "version": "2.2.5",
   "usedRoutes": [
+    "DELETE /api/experimental/mcp/{server}",
     "DELETE /api/session/{sessionID}/inbox/{inboxID}",
     "GET /api/command",
     "GET /api/event",
     "GET /api/experimental/usage/limits",
     "GET /api/info",
+    "GET /api/mcp",
     "GET /api/model",
     "GET /api/model/default",
     "GET /api/permission/request",
+    "GET /api/plugin",
     "GET /api/session",
     "GET /api/session/{sessionID}",
     "GET /api/session/{sessionID}/inbox",
@@ -16,6 +19,8 @@
     "GET /api/skill",
     "PATCH /api/session/{sessionID}",
     "PATCH /api/session/{sessionID}/inbox/{inboxID}",
+    "POST /api/experimental/mcp/{server}/connect",
+    "POST /api/experimental/mcp/{server}/disconnect",
     "POST /api/session",
     "POST /api/session/{sessionID}/agent",
     "POST /api/session/{sessionID}/command",
@@ -24,7 +29,8 @@
     "POST /api/session/{sessionID}/interrupt",
     "POST /api/session/{sessionID}/model",
     "POST /api/session/{sessionID}/permission/{requestID}/reply",
-    "POST /api/session/{sessionID}/prompt"
+    "POST /api/session/{sessionID}/prompt",
+    "PUT /api/experimental/mcp/{server}"
   ],
-  "fingerprint": "8a242228e281"
+  "fingerprint": "e853d75847b3"
 }

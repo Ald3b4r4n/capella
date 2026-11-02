@@ -96,11 +96,30 @@ export function folderPatterns(path: string): string[] {
  * rule wins, so each folder's `allow` comes after the mode's `ask` for everything outside the project. `mode` with no
  * folders changes nothing.
  */
-export function rulesWith(mode: Mode, web: WebPolicy, folders: readonly string[] = []): Rule[] {
+export function rulesWith(mode: Mode, web: WebPolicy, extras: Extras = {}): Rule[] {
+  const folders = extras.folders ?? [];
   const base = web === "mode" ? mode.rules : [...mode.rules.filter((rule) => !WEB_ACTIONS.includes(rule.action)), ...WEB_ACTIONS.map((action): Rule => ({ action, resource: "*", effect: web === "deny" ? "deny" : "allow" }))];
-  // Bypass asks about nothing, so there is nothing to lift for a folder.
-  if (folders.length === 0 || mode.rules.length === 0) return base;
-  return [...base, ...folders.flatMap((folder) => folderPatterns(folder).map((resource): Rule => ({ action: "external_directory", resource, effect: "allow" })))];
+  // Bypass asks about nothing, so there is nothing to add or to lift.
+  if (mode.rules.length === 0) return base;
+  return [...base, ...mcpRules(extras.mcp ?? []), ...folders.flatMap((folder) => folderPatterns(folder).map((resource): Rule => ({ action: "external_directory", resource, effect: "allow" })))];
+}
+
+/** What a chat is given on top of its mode: folders outside the project it may use, and the MCP servers it can reach. */
+export interface Extras {
+  folders?: readonly string[];
+  /** Names of the MCP servers opencode has: each of their tools is asked about. */
+  mcp?: readonly string[];
+}
+
+/**
+ * An MCP server's tools are permissions named `<server>_<tool>`. opencode runs them without a question by default: measured
+ * on 2.2.5, a tool of an MCP server ran in Review and even in Plan mode with no approval. A wildcard action covers every tool
+ * of a server (`server_*`), so each server the chat can reach is asked about, in every mode but Bypass. The name is listed
+ * as it is and with the characters opencode replaces; a pattern that fails to match only means a tool runs unasked as before.
+ */
+export function mcpRules(servers: readonly string[]): Rule[] {
+  const names = new Set(servers.flatMap((name) => [name, name.replace(/[^A-Za-z0-9_-]/g, "_")]));
+  return [...names].map((name): Rule => ({ action: `${name}_*`, resource: "*", effect: "ask" }));
 }
 
 /** A permission rule as opencode 1.x writes it. */
@@ -129,12 +148,14 @@ function v1FolderPatterns(path: string): string[] {
   return [...forward, ...forward.map((p) => p.slice(0, -2).split("/").join("\\") + "\\*")];
 }
 
-export function v1Rules(mode: Mode, web: WebPolicy = "mode", folders: readonly string[] = []): V1Rule[] {
+export function v1Rules(mode: Mode, web: WebPolicy = "mode", extras: Extras = {}): V1Rule[] {
+  const folders = extras.folders ?? [];
   const rules = rulesWith(mode, web);
   const base = V1_ACTIONS.map((permission): V1Rule => ({ permission, pattern: "*", action: rules.find((rule) => (rule.action === "shell" ? "bash" : rule.action) === permission)?.effect ?? "allow" }));
   // Because 1.x appends, a folder that was removed is covered too: the `ask` for everything comes back after its old `allow`.
-  if (folders.length === 0 || mode.rules.length === 0) return base;
-  return [...base, ...folders.flatMap((folder) => v1FolderPatterns(folder).map((pattern): V1Rule => ({ permission: "external_directory", pattern, action: "allow" })))];
+  if (mode.rules.length === 0) return base;
+  const mcp = mcpRules(extras.mcp ?? []).map((r): V1Rule => ({ permission: r.action, pattern: "*", action: "ask" }));
+  return [...base, ...mcp, ...folders.flatMap((folder) => v1FolderPatterns(folder).map((pattern): V1Rule => ({ permission: "external_directory", pattern, action: "allow" })))];
 }
 
 export function modeById(id: string | undefined): Mode {

@@ -312,3 +312,34 @@ test("a folder opened to the chat is allowed after the baseline ask: when the se
   assert.deepEqual(last.body.permissions!.filter((r) => r.action === "external_directory").map((r) => `${r.effect}:${r.resource}`), ["ask:*", "allow:/work/other/*"]);
   assert.deepEqual(session.folders, ["/work/other"]);
 });
+
+test("MCP servers: listed, added at runtime, switched off, removed; their tools are asked about from the moment they exist", async () => {
+  const { session } = make({ mode: "plan" });
+  await session.start();
+  assert.deepEqual(await session.mcpList(), [{ name: "docs", status: "connected", detail: undefined }]);
+  await session.send("hi");
+  const client = (session as unknown as { client: OpencodeClient }).client;
+  const bodies = async () => await client.get<Array<{ method: string; path: string; body: { permissions?: Array<{ action: string; effect: string }>; config?: unknown } }>>("/api/calls");
+  const created = (await bodies()).find((c) => c.method === "POST" && c.path === "/api/session")!;
+  assert.ok(created.body.permissions!.some((r) => r.action === "docs_*" && r.effect === "ask"), "the server that was already there is covered at creation");
+  await session.mcpAdd("probe", { type: "local", command: ["node", "x.mjs"] });
+  const put = (await bodies()).find((c) => c.method === "PUT")!;
+  assert.deepEqual(put.body.config, { type: "local", command: ["node", "x.mjs"] });
+  const patched = (await bodies()).filter((c) => c.method === "PATCH" && c.path === "/api/session/ses_1").at(-1)!;
+  assert.deepEqual(patched.body.permissions!.filter((r) => r.action.endsWith("_*")).map((r) => r.action), ["docs_*", "probe_*"]);
+  await session.mcpAdd("broken", { type: "local", command: ["nonexistent-program"] });
+  const list = await session.mcpList();
+  assert.deepEqual(list.map((s) => `${s.name}:${s.status}`), ["docs:connected", "probe:connected", "broken:failed"]);
+  assert.match(list.find((s) => s.name === "broken")!.detail ?? "", /no such program/);
+  await session.mcpSetEnabled("probe", false);
+  assert.equal((await session.mcpList()).find((s) => s.name === "probe")!.status, "disabled");
+  await session.mcpRemove("probe");
+  assert.equal((await session.mcpList()).some((s) => s.name === "probe"), false);
+});
+
+test("skills and the plugins that are not built in", async () => {
+  const { session } = make();
+  await session.start();
+  assert.deepEqual((await session.skills()).map((s) => s.name), ["pdf"]);
+  assert.deepEqual(await session.plugins(), [{ id: "my-plugin", source: "npm: my-plugin@1.0.0", state: "active" }]);
+});

@@ -34,6 +34,7 @@ const readBody = (req) =>
 
 // Messages sent while a turn runs: `delivery: "queue"` waits for the end of the work, `steer` joins it at the next step.
 const inbox = [];
+let mcp = [{ name: "docs", status: { status: "connected" } }];
 let running = false;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -133,7 +134,7 @@ const server = createServer(async (req, res) => {
     req.on("close", () => listeners.delete(res));
     return;
   }
-  const body = ["POST", "PATCH"].includes(req.method) ? await readBody(req) : {};
+  const body = ["POST", "PATCH", "PUT"].includes(req.method) ? await readBody(req) : {};
   record(body);
   // Stored sessions: a list, one old session with a model and a short conversation, and forking.
   if (req.method === "GET" && path === "/api/session")
@@ -177,6 +178,26 @@ const server = createServer(async (req, res) => {
     selected = body.model;
     return json(res, 200);
   }
+  // MCP servers: one from the user's own config, and whatever a test adds at runtime.
+  if (req.method === "GET" && path === "/api/mcp") return json(res, 200, { location: { directory: "x" }, data: mcp.map((s) => ({ name: s.name, status: s.status })) });
+  const mcpRoute = /^\/api\/experimental\/mcp\/([^/]+)(?:\/(connect|disconnect))?$/.exec(path);
+  if (mcpRoute && req.method === "PUT") {
+    const name = decodeURIComponent(mcpRoute[1]);
+    const bad = body.config?.type === "local" && String(body.config.command?.[0]).includes("nonexistent");
+    mcp = mcp.filter((s) => s.name !== name).concat([{ name, config: body.config, status: bad ? { status: "failed", error: "Connection closed: no such program" } : { status: "connected" } }]);
+    return json(res, 200);
+  }
+  if (mcpRoute && req.method === "DELETE") {
+    mcp = mcp.filter((s) => s.name !== decodeURIComponent(mcpRoute[1]));
+    return json(res, 200);
+  }
+  if (mcpRoute && req.method === "POST") {
+    const server = mcp.find((s) => s.name === decodeURIComponent(mcpRoute[1]));
+    if (!server) return json(res, 404, { message: "no such server" });
+    server.status = mcpRoute[2] === "connect" ? { status: "connected" } : { status: "disabled" };
+    return json(res, 200);
+  }
+  if (req.method === "GET" && path === "/api/plugin") return json(res, 200, { location: { directory: "x" }, data: [{ id: "opencode.core", source: { type: "builtin" }, features: {}, state: { status: "active" } }, { id: "my-plugin", source: { type: "npm", name: "my-plugin@1.0.0" }, features: {}, state: { status: "active" } }] });
   if (req.method === "GET" && path === "/api/command") return json(res, 200, { location: { directory: "x" }, data: [{ name: "review", description: "Review the changes" }, { name: "init" }] });
   if (req.method === "GET" && path === "/api/skill") return json(res, 200, { location: { directory: "x" }, data: [{ id: "skl_pdf", name: "pdf", description: "Work with PDF files", path: "/x", content: "" }] });
   if (req.method === "POST" && path === "/api/session/ses_1/command") {

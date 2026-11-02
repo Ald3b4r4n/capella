@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.4 (unreleased)
+
+- **Tools panel:** the MCP servers, skills and plugins of your opencode. MCP servers can be turned off and on, and added with **Add an MCP server…** (name, then a command or an https address; a question shows exactly what will run). Servers added in Capella are kept per project and registered again in each chat (opencode forgets them on restart) and can be removed. Skills open their file; plugins are listed.
+- **Fix (safety):** the tools of MCP servers ran with no approval in every mode, Plan included (measured on 2.2.5). They are now asked about in every mode but Bypass, on 2.x and 1.x, and a server added later is covered at once.
+- The e2e answers the editor's own dialogs and input boxes (`window.dialogStyle: custom`): the Add folder, web-access and Add MCP questions are exercised for real, with Cancel and accept. `scripts/check-mcp.ts` checks the MCP approval flow against a real opencode. The test hook for the MCP question was removed.
+- The README now says plainly where the task list works (1.x) and where it cannot (2.2.5 has no todo tool).
+
 ## 0.1.3 (unreleased)
 
 - **Add a folder** (+ menu): lets the agent use a folder outside the project in this chat only, after a question that says what it allows. It shows as a removable chip, applies at once to the live session on 2.x and 1.x, and does not carry over to another chat. A drive root, your home folder and the folder above it are refused.

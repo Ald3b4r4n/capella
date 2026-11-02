@@ -37,7 +37,7 @@ const userData = join(work, "user-data");
 for (const d of [workspace, join(userData, "User")]) mkdirSync(d, { recursive: true });
 writeFileSync(
   join(userData, "User", "settings.json"),
-  JSON.stringify({ "workbench.startupEditor": "none", "security.workspace.trust.enabled": false, "telemetry.telemetryLevel": "off", "update.mode": "none", "extensions.autoCheckUpdates": false, "workbench.tips.enabled": false, "window.restoreWindows": "none", "workbench.colorTheme": "Default Dark Modern", "chat.disableAIFeatures": true, "window.dialogStyle": "custom", "workbench.secondarySideBar.defaultVisibility": "hidden" }, null, 2),
+  JSON.stringify({ "window.dialogStyle": "custom", "workbench.startupEditor": "none", "security.workspace.trust.enabled": false, "telemetry.telemetryLevel": "off", "update.mode": "none", "extensions.autoCheckUpdates": false, "workbench.tips.enabled": false, "window.restoreWindows": "none", "workbench.colorTheme": "Default Dark Modern", "chat.disableAIFeatures": true, "window.dialogStyle": "custom", "workbench.secondarySideBar.defaultVisibility": "hidden" }, null, 2),
 );
 writeFileSync(join(workspace, "hello.txt"), "hello from the capella e2e\n");
 writeFileSync(join(workspace, "index.html"), "<!doctype html><title>Capella static preview</title><h1>Static page OK</h1>");
@@ -57,6 +57,8 @@ const traceFile = join(work, "trace.log");
 // "Add folder" opens a native dialog and a native question, which a script cannot drive: a development host (this one) takes the folder from here instead.
 const libFolder = join(work, "shared-lib");
 mkdirSync(libFolder, { recursive: true });
+// "Add an MCP server" is driven for real (quick picks, input boxes and the question), with a tiny stdio server of the test fixtures.
+const miniMcp = join(root, "test", "fixtures", "mini-mcp.mjs");
 const childEnv = { ...process.env, CAPELLA_TRACE_FILE: traceFile, CAPELLA_DEV_ADD_FOLDER: libFolder };
 if (V1) {
   const v1Home = join(work, "v1-home");
@@ -290,6 +292,23 @@ try {
   check("the real opencode started and Capella shows its version", /^opencode \d/.test(chips.version), chips.version);
   check("the chat starts in Plan mode", chips.mode === "Plan", chips.mode);
   check("styles and the brand mark loaded through the webview", await evalWeb("getComputedStyle(d.body).backgroundColor !== 'rgba(0, 0, 0, 0)' && d.querySelector('.welcome img').naturalWidth > 0"));
+  // The editor's own dialogs and input boxes (the real ones: nothing is skipped).
+  const clickDialog = async (label, timeout = 15000) => {
+    await waitFor(`the dialog button "${label}"`, () => evalPage(`[...document.querySelectorAll('.monaco-dialog-box .dialog-buttons .monaco-button')].some(b => b.textContent.trim() === ${JSON.stringify(label)})`), timeout);
+    await evalPage(`(() => { [...document.querySelectorAll('.monaco-dialog-box .dialog-buttons .monaco-button')].find(b => b.textContent.trim() === ${JSON.stringify(label)}).click(); return true; })()`);
+    await sleep(500);
+  };
+  const dialogText = () => evalPage("(() => { const d = document.querySelector('.monaco-dialog-box'); return d ? d.innerText : null; })()");
+  const inputBox = async (text) => {
+    await waitFor("the input box", () => evalPage("!!document.querySelector('.quick-input-widget:not([style*=\"display: none\"]) input')"), 15000);
+    await sleep(300);
+    if (text !== undefined) await browser.send("Input.insertText", { text }, pageSession);
+    await sleep(300);
+    await key("rawKeyDown", "Enter", { windowsVirtualKeyCode: 13, text: "\r" });
+    await key("keyUp", "Enter", { windowsVirtualKeyCode: 13 });
+    await sleep(400);
+  };
+
   // The / palette, the task list and a picture in an answer: none needs a model turn (the page is given the events a turn would send).
   const paletteChecks = async () => {
     const type = (value) => evalWeb(`(() => { const i = d.getElementById('input'); i.value = ${JSON.stringify(value)}; i.dispatchEvent(new Event('input')); i.focus(); return true; })()`);
@@ -331,12 +350,46 @@ try {
     await shot("29-answer-picture");
     await post({ type: "turn-ended", sessionId: "s", outcome: "succeeded" });
 
+    // Always allowing the web asks first; Cancel leaves it as it was.
+    const webMenuItem = (label) => `(() => { [...d.querySelectorAll('#menu .item')].find(i => i.querySelector('span').textContent === ${JSON.stringify(label)}).click(); return true; })()`;
+    const webBefore = await evalWeb("d.getElementById('webBtn').textContent");
+    await evalWeb("(() => { d.getElementById('webBtn').click(); return true; })()");
+    await waitFor("the web menu", () => evalWeb("!d.getElementById('menu').hidden"), 10000);
+    await evalWeb(webMenuItem("Always allow"));
+    const webQuestion = await waitFor("the web question", dialogText, 15000).catch(() => null);
+    check("allowing the web asks first and says what it means", !!webQuestion && /use the web without asking/.test(webQuestion), String(webQuestion));
+    await clickDialog("Cancel");
+    await sleep(600);
+    check("Cancel leaves web access as it was", (await evalWeb("d.getElementById('webBtn').textContent")) === webBefore, webBefore);
+    await evalWeb("(() => { d.getElementById('webBtn').click(); return true; })()");
+    await waitFor("the web menu", () => evalWeb("!d.getElementById('menu').hidden"), 10000);
+    await evalWeb(webMenuItem("Always allow"));
+    await clickDialog("Allow web access");
+    const webOn = await waitFor("web on", () => evalWeb("/Web: on/.test(d.getElementById('webBtn').textContent)"), 15000).catch(() => false);
+    check("accepting turns web access on for this chat", !!webOn);
+    await evalWeb("(() => { d.getElementById('webBtn').click(); return true; })()");
+    await waitFor("the web menu", () => evalWeb("!d.getElementById('menu').hidden"), 10000);
+    await evalWeb(webMenuItem("Follow the mode"));
+    await waitFor("web back to the mode", () => evalWeb("/per mode/.test(d.getElementById('webBtn').textContent)"), 15000);
+
     // A folder outside the project, from the + menu: a chip with a remove button; removing it takes the chip away.
     await evalWeb("(() => { d.getElementById('plusBtn').click(); return true; })()");
     await waitFor("the + menu", () => evalWeb("!d.getElementById('menu').hidden"), 10000);
     const hasItem = await evalWeb("[...d.querySelectorAll('#menu .item')].some(i => /^Add a folder/.test(i.querySelector('span').textContent))");
     check("the + menu offers Add a folder", hasItem);
-    await evalWeb("(() => { [...d.querySelectorAll('#menu .item')].find(i => /^Add a folder/.test(i.querySelector('span').textContent)).click(); return true; })()");
+    const addFolderMenu = "(() => { d.getElementById('plusBtn').click(); return true; })()";
+    const clickAddFolder = "(() => { [...d.querySelectorAll('#menu .item')].find(i => /^Add a folder/.test(i.querySelector('span').textContent)).click(); return true; })()";
+    await evalWeb(clickAddFolder);
+    const question = await waitFor("the question", dialogText, 15000).catch(() => null);
+    console.log("folder question:", JSON.stringify(question));
+    check("adding a folder asks first, naming the folder and what it allows", !!question && /Let the agent use/.test(question) && /shared-lib/.test(question) && /this chat only/.test(question), String(question));
+    await shot("35-folder-question");
+    await clickDialog("Cancel");
+    check("answering Cancel adds nothing", await evalWeb("d.getElementById('folders').hidden"));
+    await evalWeb(addFolderMenu);
+    await waitFor("the + menu", () => evalWeb("!d.getElementById('menu').hidden"), 10000);
+    await evalWeb(clickAddFolder);
+    await clickDialog("Add folder");
     const folder = await waitFor("the folder chip", () => evalWeb("(() => { const f = d.getElementById('folders'); return f.hidden ? null : { names: [...f.querySelectorAll('.fname')].map(x => x.textContent), title: f.querySelector('.chip-file').title, notice: d.getElementById('notice').textContent }; })()"), 20000).catch(() => null);
     console.log("folder chip:", JSON.stringify(folder));
     check("the folder appears as a chip, named after the folder, and the chat says it was added", !!folder && folder.names.length === 1 && folder.names[0] === "shared-lib" && /shared-lib/.test(folder.title) && /was added/.test(folder.notice), JSON.stringify(folder));
@@ -346,11 +399,57 @@ try {
     check("removing the chip takes the folder away", !!gone);
   };
 
+  // The Tools panel: MCP servers (add, switch off and on, remove), skills and plugins. No model turn.
+  const toolsChecks = async () => {
+    await evalWeb("(() => { d.getElementById('toolsBtn').click(); return true; })()");
+    const first = await waitFor("the Tools panel", () => evalWeb("(() => { const t = d.getElementById('tools'); const b = d.getElementById('toolsBody'); return !t.hidden && b.querySelector('.tools-section') ? [...b.querySelectorAll('h3')].map(h => h.textContent) : null; })()"), 20000).catch(() => null);
+    check("the Tools panel lists MCP servers, skills and plugins", !!first && first.length === 3 && /^MCP servers/.test(first[0]) && /^Skills \(\d+\)/.test(first[1]) && /^Plugins/.test(first[2]), JSON.stringify(first));
+    await shot("33-tools");
+    const rowOf = (name) => `[...d.querySelectorAll('#toolsBody .session')].find(r => r.querySelector('.session-title').textContent === ${JSON.stringify(name)})`;
+    const addMcp = "(() => { [...d.querySelectorAll('#toolsBody .btn')].find(b => /^Add an MCP server/.test(b.textContent)).click(); return true; })()";
+    const quoted = (p) => '"' + p + '"';
+    // a first attempt that is cancelled at the question
+    await evalWeb(addMcp);
+    await inputBox(); // the kind: the first choice, a program on this computer
+    await inputBox("e2ecancel");
+    await inputBox(quoted(process.execPath) + " " + quoted(miniMcp));
+    const mcpQuestion = await waitFor("the MCP question", dialogText, 15000).catch(() => null);
+    console.log("mcp question:", JSON.stringify(mcpQuestion));
+    check("adding a server asks first, with the exact program and arguments", !!mcpQuestion && /e2ecancel/.test(mcpQuestion) && /Program: /.test(mcpQuestion) && /mini-mcp\.mjs/.test(mcpQuestion) && /with your user's permissions/.test(mcpQuestion), String(mcpQuestion));
+    await shot("36-mcp-question");
+    await clickDialog("Cancel");
+    await sleep(1500);
+    check("answering Cancel adds nothing", await evalWeb(`!${rowOf("e2ecancel")}`));
+    // and the real one
+    await evalWeb(addMcp);
+    await inputBox();
+    await inputBox("e2eprobe");
+    await inputBox(quoted(process.execPath) + " " + quoted(miniMcp));
+    await clickDialog("Add server");
+    const added = await waitFor("the server to connect", () => evalWeb(`(() => { const r = ${rowOf("e2eprobe")}; return r ? { badge: r.querySelector('.badge').textContent, meta: r.querySelector('.session-meta').textContent } : null; })()`), 30000).catch(() => null);
+    const connected = await waitFor("connected", () => evalWeb(`(() => { const r = ${rowOf("e2eprobe")}; return r && r.querySelector('.badge').textContent === 'connected'; })()`), 30000).catch(() => false);
+    console.log("mcp row:", JSON.stringify(added));
+    check("a server added through Capella shows up, says where it came from and what it runs, and connects", !!added && !!connected && /added in Capella/.test(added.meta) && /mini-mcp\.mjs/.test(added.meta), JSON.stringify(added));
+    await shot("34-tools-added");
+    await evalWeb(`(() => { ${rowOf("e2eprobe")}.querySelector('.btn').click(); return true; })()`);
+    const off = await waitFor("disabled", () => evalWeb(`(() => { const r = ${rowOf("e2eprobe")}; return r && r.querySelector('.badge').textContent === 'disabled'; })()`), 20000).catch(() => false);
+    check("Turn off disconnects it", !!off);
+    await evalWeb(`(() => { ${rowOf("e2eprobe")}.querySelector('.btn').click(); return true; })()`);
+    const on = await waitFor("connected again", () => evalWeb(`(() => { const r = ${rowOf("e2eprobe")}; return r && r.querySelector('.badge').textContent === 'connected'; })()`), 30000).catch(() => false);
+    check("Turn on connects it again", !!on);
+    await evalWeb(`(() => { [...${rowOf("e2eprobe")}.querySelectorAll('.btn')].find(b => b.textContent === 'Remove').click(); return true; })()`);
+    const gone = await waitFor("the server to go", () => evalWeb(`!${rowOf("e2eprobe")}`), 20000).catch(() => false);
+    check("Remove forgets a server that was added in Capella", !!gone);
+    await evalWeb("(() => { d.getElementById('toolsClose').click(); return true; })()");
+    check("Close hides the panel", await evalWeb("d.getElementById('tools').hidden"));
+  };
+
   if (process.env.E2E_UI_ONLY) {
     // Only the checks that need no model turn (the free models have a cap of their own).
     await scrollChecks();
     await controlChecks();
     await paletteChecks();
+    await toolsChecks();
     console.log(failed === 0 ? `[${label}] ALL CHECKS PASSED (UI only)` : `[${label}] ${failed} CHECK(S) FAILED (UI only)`);
     throw Object.assign(new Error("ui-only run finished"), { v1Done: true });
   }
@@ -604,6 +703,7 @@ try {
   }
 
   await paletteChecks();
+  await toolsChecks();
 
   // A message sent while the agent works waits in the queue and joins the same turn (opencode 2.x only).
   if (!V1 && !process.env.E2E_SKIP_QUEUE) {

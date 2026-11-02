@@ -6,11 +6,16 @@
     "GET /config/providers",
     "GET /event",
     "GET /global/health",
+    "GET /mcp",
     "GET /permission",
     "GET /session",
     "GET /session/{sessionID}",
     "GET /session/{sessionID}/message",
+    "GET /skill",
     "PATCH /session/{sessionID}",
+    "POST /mcp",
+    "POST /mcp/{name}/connect",
+    "POST /mcp/{name}/disconnect",
     "POST /session",
     "POST /session/{sessionID}/abort",
     "POST /session/{sessionID}/command",
@@ -19,5 +24,5 @@
     "POST /session/{sessionID}/prompt_async",
     "POST /session/{sessionID}/summarize"
   ],
-  "fingerprint": "4a1427c0d957"
+  "fingerprint": "746dcb81bd6b"
 }

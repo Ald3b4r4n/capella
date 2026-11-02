@@ -1,5 +1,5 @@
 import type { SessionEvent } from "../opencode/session.ts";
-import type { AttachmentView, ChangeRowView, FileChangeView, FromWebview, ModeRow, ModelRow, QueueItemView, SessionRowView, SlashEntryView, ToWebview, UsageView } from "../ui/protocol.ts";
+import type { AttachmentView, ChangeRowView, FileChangeView, FromWebview, ModeRow, ModelRow, QueueItemView, SessionRowView, SlashEntryView, ToolsView, ToWebview, UsageView } from "../ui/protocol.ts";
 import type { ReplayItem } from "../opencode/history.ts";
 import { findLocalUrl } from "../ui/preview.ts";
 import { renderMarkdown } from "./markdown.ts";
@@ -832,6 +832,85 @@ function paintFolders(items: Array<{ path: string; name: string }>): void {
   }
 }
 
+// ---- Tools: MCP servers, skills, plugins -------------------------------------------------------------------------------
+
+const toolsEl = $<HTMLElement>("tools");
+const toolsBody = $<HTMLElement>("toolsBody");
+
+function toolsSection(title: string, hint?: string): HTMLElement {
+  const box = el("section", "tools-section");
+  box.append(el("h3", undefined, title));
+  if (hint) box.append(el("p", "faint small", hint));
+  toolsBody.append(box);
+  return box;
+}
+
+function paintTools(tools: ToolsView): void {
+  toolsBody.replaceChildren();
+  const mcp = toolsSection("MCP servers", "Their tools are asked about before they run, except in Bypass mode.");
+  for (const server of tools.mcp) {
+    const row = el("div", "session");
+    const text = el("div", "session-text");
+    text.append(el("div", "session-title", server.name), el("div", "session-meta faint", [server.managed ? "added in Capella" : "from your opencode config", server.summary ?? ""].filter(Boolean).join(" · ")));
+    if (server.detail) text.append(el("div", "session-meta error-text", server.detail));
+    const actions = el("div", "session-actions");
+    actions.append(el("span", `badge ${server.status}`, server.status));
+    const on = server.status === "connected" || server.status === "pending";
+    const toggle = el("button", "btn", on ? "Turn off" : "Turn on");
+    toggle.type = "button";
+    toggle.addEventListener("click", () => post({ type: "mcpToggle", name: server.name, on: !on }));
+    actions.append(toggle);
+    if (server.managed) {
+      const remove = el("button", "btn", "Remove");
+      remove.type = "button";
+      remove.title = tools.removeForgets ? "Forget this server" : "Disconnect it and stop starting it in new chats (opencode 1.x keeps it listed until it restarts)";
+      remove.addEventListener("click", () => post({ type: "mcpRemove", name: server.name }));
+      actions.append(remove);
+    }
+    row.append(text, actions);
+    mcp.append(row);
+  }
+  if (tools.mcp.length === 0) mcp.append(el("div", "faint pad", "No MCP servers."));
+  const add = el("button", "btn", "Add an MCP server\u2026");
+  add.type = "button";
+  add.addEventListener("click", () => post({ type: "mcpAdd" }));
+  mcp.append(add);
+
+  const skills = toolsSection(`Skills (${tools.skills.length})`, "Type / in the message box to use one.");
+  for (const skill of tools.skills) {
+    const row = el("div", "session");
+    const text = el("div", "session-text");
+    text.append(el("div", "session-title", skill.name));
+    if (skill.description) text.append(el("div", "session-meta faint", skill.description.length > 160 ? skill.description.slice(0, 160) + "\u2026" : skill.description));
+    const actions = el("div", "session-actions");
+    if (skill.openable) {
+      const open = el("button", "btn", "Open");
+      open.type = "button";
+      open.addEventListener("click", () => post({ type: "openSkill", name: skill.name }));
+      actions.append(open);
+    }
+    row.append(text, actions);
+    skills.append(row);
+  }
+  const plugins = toolsSection(`Plugins (${tools.plugins.length})`, "Plugins other than opencode's own. They come from your opencode configuration and are not changed here.");
+  for (const plugin of tools.plugins) {
+    const row = el("div", "session");
+    const text = el("div", "session-text");
+    text.append(el("div", "session-title", plugin.source), el("div", "session-meta faint", plugin.state));
+    row.append(text);
+    plugins.append(row);
+  }
+  if (tools.plugins.length === 0) plugins.append(el("div", "faint pad", "No plugins besides opencode's own."));
+}
+
+function openTools(): void {
+  toolsEl.hidden = false;
+  post({ type: "listTools" });
+}
+$<HTMLButtonElement>("toolsBtn").addEventListener("click", openTools);
+$<HTMLButtonElement>("toolsRefresh").addEventListener("click", () => post({ type: "listTools" }));
+$<HTMLButtonElement>("toolsClose").addEventListener("click", () => (toolsEl.hidden = true));
+
 // ---- the / palette ------------------------------------------------------------------------------------------------
 
 let slashEntries: SlashEntryView[] | undefined;
@@ -1162,6 +1241,9 @@ window.addEventListener("message", (e: MessageEvent<ToWebview>) => {
       break;
     case "folders":
       paintFolders(message.items);
+      break;
+    case "tools":
+      paintTools(message.tools);
       break;
     case "slash":
       slashEntries = message.entries;

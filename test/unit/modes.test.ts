@@ -60,19 +60,32 @@ test("every mode but bypass asks before the agent goes outside the project; a fo
   assert.deepEqual(folderPatterns("D:\\Projetos\\Lib\\"), ["d:/Projetos/Lib/*", "D:/Projetos/Lib/*"]);
   assert.deepEqual(folderPatterns("/home/me/lib"), ["/home/me/lib/*"]);
   const review = modeById("review");
-  const rules = rulesWith(review, "mode", ["D:\\Projetos\\Lib"]);
+  const rules = rulesWith(review, "mode", { folders: ["D:\\Projetos\\Lib"] });
   const ask = rules.findIndex((r) => r.action === "external_directory" && r.resource === "*");
   const allow = rules.findIndex((r) => r.action === "external_directory" && r.effect === "allow");
   assert.ok(ask >= 0 && allow > ask, "the allow comes after the ask: the last match wins");
   assert.deepEqual(rules.filter((r) => r.effect === "allow").map((r) => r.resource), ["d:/Projetos/Lib/*", "D:/Projetos/Lib/*"]);
   // web policy and folders are independent
-  assert.equal(rulesWith(review, "deny", ["/x"]).filter((r) => r.action === "websearch").length, 1);
+  assert.equal(rulesWith(review, "deny", { folders: ["/x"] }).filter((r) => r.action === "websearch").length, 1);
   // bypass asks nothing, so there is nothing to lift
-  assert.deepEqual(rulesWith(modeById("bypass"), "mode", ["/x"]), []);
+  assert.deepEqual(rulesWith(modeById("bypass"), "mode", { folders: ["/x"], mcp: ["srv"] }), []);
   // 1.x appends: base first, folders last
-  const v1 = v1Rules(review, "mode", ["/x/y"]);
+  const v1 = v1Rules(review, "mode", { folders: ["/x/y"] });
   assert.deepEqual(v1.slice(-1), [{ permission: "external_directory", pattern: "/x/y/*", action: "allow" }]);
   assert.deepEqual(v1.slice(0, 5).map((r) => `${r.permission}:${r.pattern}`), ["edit:*", "bash:*", "webfetch:*", "websearch:*", "external_directory:*"]);
   // a session that carries folder rules is still recognised as its mode
-  assert.equal(modeOf("build", rulesWith(review, "mode", ["/x"])), "review");
+  assert.equal(modeOf("build", rulesWith(review, "mode", { folders: ["/x"] })), "review");
+});
+
+test("the tools of every MCP server are asked about in every mode but Bypass, before the folders' allow", async () => {
+  const { mcpRules, rulesWith, v1Rules } = await import("../../src/opencode/modes.ts");
+  assert.deepEqual(mcpRules(["rea", "my.srv"]).map((r) => r.action), ["rea_*", "my.srv_*", "my_srv_*"]);
+  for (const id of ["plan", "review", "accept-edits"] as const) {
+    const rules = rulesWith(modeById(id), "mode", { mcp: ["rea"], folders: ["/x"] });
+    const ask = rules.findIndex((r) => r.action === "rea_*" && r.effect === "ask");
+    const allow = rules.findIndex((r) => r.action === "external_directory" && r.effect === "allow");
+    assert.ok(ask >= 0 && allow > ask, id);
+  }
+  assert.deepEqual(rulesWith(modeById("bypass"), "mode", { mcp: ["rea"] }), []);
+  assert.deepEqual(v1Rules(modeById("review"), "mode", { mcp: ["rea"] }).slice(-1), [{ permission: "rea_*", pattern: "*", action: "ask" }]);
 });

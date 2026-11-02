@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { Backend, ModelRef, PromptFile, PromptOptions, SlashEntry } from "./backend.ts";
+import type { Backend, McpConfig, McpServerInfo, ModelRef, PluginInfo, PromptFile, PromptOptions, SkillInfo, SlashEntry } from "./backend.ts";
 import { BackendV1 } from "./backend-v1.ts";
 import { BackendV2 } from "./backend-v2.ts";
 import { EventStream, OpencodeClient } from "./client.ts";
@@ -70,6 +70,8 @@ export class OpencodeSession extends EventEmitter {
   private mode: ModeId;
   private webPolicy: WebPolicy = "mode";
   private extraFolders: string[] = [];
+  /** Names of the MCP servers the permission rules cover. */
+  private mcpNames: string[] = [];
   private readonly announced = new Set<string>();
   private catalogTimer?: NodeJS.Timeout;
 
@@ -228,7 +230,7 @@ export class OpencodeSession extends EventEmitter {
     if (this.sessionId) return this.sessionId;
     const backend = this.requireBackend();
     const model = await this.resolveModel();
-    const id = await backend.createSession(this.mode, model, this.effortValue, this.webPolicy, this.extraFolders);
+    const id = await backend.createSession(this.mode, model, this.effortValue, this.webPolicy, await this.extras(backend));
     this.sessionId = id;
     backend.resetEvents();
     this.model = model;
@@ -251,6 +253,40 @@ export class OpencodeSession extends EventEmitter {
     if (effort !== undefined && !allowed.includes(effort)) throw new Error(`${effort} is not one of this model's options`);
     if (this.sessionId) await this.requireBackend().selectModel(this.sessionId, model, effort);
     this.effortValue = effort;
+  }
+
+  /** What the permission rules add to the mode: the folders opened to this chat and the MCP servers there are. */
+  private async extras(backend: Backend = this.requireBackend()): Promise<{ folders: string[]; mcp: string[] }> {
+    // Read fresh each time: a server may have been added or removed since the rules were last written.
+    this.mcpNames = (await backend.mcpList().catch(() => undefined))?.map((s) => s.name) ?? this.mcpNames;
+    return { folders: this.extraFolders, mcp: this.mcpNames };
+  }
+
+  async mcpList(): Promise<McpServerInfo[]> {
+    return this.requireBackend().mcpList();
+  }
+
+  /** Adds a server and rewrites the rules so that its tools are asked about like the rest. */
+  async mcpAdd(name: string, config: McpConfig): Promise<void> {
+    const backend = this.requireBackend();
+    await backend.mcpAdd(name, config);
+    if (this.sessionId) await backend.applyMode(this.sessionId, this.mode, this.webPolicy, await this.extras());
+  }
+
+  async mcpSetEnabled(name: string, on: boolean): Promise<void> {
+    await this.requireBackend().mcpSetEnabled(name, on);
+  }
+
+  async mcpRemove(name: string): Promise<void> {
+    await this.requireBackend().mcpRemove(name);
+  }
+
+  async skills(): Promise<SkillInfo[]> {
+    return this.requireBackend().skills().catch(() => []);
+  }
+
+  async plugins(): Promise<PluginInfo[]> {
+    return this.requireBackend().plugins().catch(() => []);
   }
 
   /** Whether a message can be sent while a turn runs. Known once the server answered. */
@@ -308,20 +344,20 @@ export class OpencodeSession extends EventEmitter {
   /** Changes the mode of a live session: the mode's rules replace the session's, and so does the agent. Not during a turn. */
   async setMode(id: ModeId): Promise<void> {
     const mode = modeById(id);
-    if (this.sessionId) await this.requireBackend().applyMode(this.sessionId, mode.id, this.webPolicy, this.extraFolders);
+    if (this.sessionId) await this.requireBackend().applyMode(this.sessionId, mode.id, this.webPolicy, await this.extras());
     this.mode = mode.id;
   }
 
   /** Web access of this chat, laid over the mode's rules. Not during a turn; the caller checks. */
   async setWeb(policy: WebPolicy): Promise<void> {
-    if (this.sessionId) await this.requireBackend().applyMode(this.sessionId, this.mode, policy, this.extraFolders);
+    if (this.sessionId) await this.requireBackend().applyMode(this.sessionId, this.mode, policy, await this.extras());
     this.webPolicy = policy;
   }
 
   /** Replaces the folders opened to this chat. The new set takes effect at once on a live session. Not during a turn; the caller checks. */
   async setFolders(folders: readonly string[]): Promise<void> {
-    if (this.sessionId) await this.requireBackend().applyMode(this.sessionId, this.mode, this.webPolicy, folders);
     this.extraFolders = [...folders];
+    if (this.sessionId) await this.requireBackend().applyMode(this.sessionId, this.mode, this.webPolicy, await this.extras());
   }
 
   /** OpenCode Go allowance and Console budgets. Undefined when not signed in or when this opencode has none (1.x has none). */
@@ -358,7 +394,7 @@ export class OpencodeSession extends EventEmitter {
       this.model = stored;
       this.effortValue = undefined;
     }
-    await backend.applyMode(id, this.mode, this.webPolicy, this.extraFolders);
+    await backend.applyMode(id, this.mode, this.webPolicy, await this.extras(backend));
     if (this.model) await backend.selectModel(id, this.model, this.effortValue);
     const items = await backend.messages(id);
     await this.surfacePendingApprovals();

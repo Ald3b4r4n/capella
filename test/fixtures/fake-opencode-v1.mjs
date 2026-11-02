@@ -9,6 +9,7 @@ const expected = "Basic " + Buffer.from(`opencode:${password}`).toString("base64
 const calls = [];
 const listeners = new Set();
 const pending = new Map();
+const mcp = { docs: { status: "connected" } };
 let n = 0;
 
 const emit = (type, properties) => {
@@ -88,7 +89,9 @@ const server = createServer(async (req, res) => {
       ],
       default: { opencode: "m1" },
     });
-  if (req.method === "GET" && path === "/config") return json(res, 200, { username: "x" });
+  if (req.method === "GET" && path === "/config") return json(res, 200, { username: "x", plugin: ["some-plugin@1.2.3", ["other-plugin", { opt: 1 }]] });
+  if (req.method === "GET" && path === "/mcp") return json(res, 200, mcp);
+  if (req.method === "GET" && path === "/skill") return json(res, 200, [{ name: "pdf", description: "Work with PDFs", location: "/skills/pdf/SKILL.md", content: "x" }]);
   if (req.method === "GET" && path === "/command") return json(res, 200, [{ name: "review", description: "Review the changes", template: "", hints: [] }, { name: "pdf", description: "Work with PDFs", source: "skill", template: "", hints: [] }]);
   if (req.method === "GET" && path === "/permission") return json(res, 200, [...pending.values()].map(({ resolve, reply, ...row }) => row));
   if (req.method === "GET" && path === "/session")
@@ -121,6 +124,17 @@ const server = createServer(async (req, res) => {
     res.writeHead(204).end();
     void wait(30).then(() => runTurn(sid, text));
     return;
+  }
+  if (req.method === "POST" && path === "/mcp") {
+    mcp[body.name] = { status: "connected" };
+    return json(res, 200, mcp);
+  }
+  const mcpRoute = /^\/mcp\/([^/]+)\/(connect|disconnect)$/.exec(path);
+  if (req.method === "POST" && mcpRoute) {
+    const name = decodeURIComponent(mcpRoute[1]);
+    if (!mcp[name]) return json(res, 404, { message: "no such server" });
+    mcp[name] = { status: mcpRoute[2] === "connect" ? "connected" : "disabled" };
+    return json(res, 200, true);
   }
   if (req.method === "POST" && /\/abort$/.test(path)) return json(res, 200, true);
   if (req.method === "POST" && /^\/session\/ses_\w+\/(command|summarize)$/.test(path)) return json(res, 200, true);

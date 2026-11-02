@@ -23,6 +23,7 @@ export function chatHtml(options: ChatHtmlOptions): string {
   <div class="brand"><img src="${escapeHtml(mediaUri("capella.svg"))}" alt="" width="20" height="20"><span>Capella</span><span id="version" class="faint"></span></div>
   <div class="top-right">
     <span id="usage" class="usage" hidden></span>
+    <button id="toolsBtn" class="ghost" title="MCP servers, skills and plugins of this opencode">Tools</button>
     <button id="previewBtn" class="ghost" title="Open a page in the editor's browser: a dev server, an address, or an HTML file of this folder">Preview</button>
     <button id="changesBtn" class="ghost" hidden title="Files this chat changed">Changes</button>
     <button id="historyBtn" class="ghost" title="Continue or fork a stored chat of this folder">History</button>
@@ -36,6 +37,15 @@ export function chatHtml(options: ChatHtmlOptions): string {
     <button id="historyClose" class="ghost" aria-label="Close">Close</button>
   </div>
   <div id="historyList" class="overlay-body"></div>
+</section>
+<section id="tools" class="overlay" hidden aria-label="Tools">
+  <div class="overlay-head">
+    <strong>Tools</strong>
+    <span class="spacer"></span>
+    <button id="toolsRefresh" class="ghost" aria-label="Read again">Refresh</button>
+    <button id="toolsClose" class="ghost" aria-label="Close">Close</button>
+  </div>
+  <div id="toolsBody" class="overlay-body"></div>
 </section>
 <section id="changes" class="overlay" hidden aria-label="Changed files">
   <div class="overlay-head">

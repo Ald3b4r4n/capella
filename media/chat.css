@@ -216,3 +216,13 @@ textarea { width: 100%; resize: none; border: 0; outline: 0; background: transpa
 .answer-pic { display: block; max-width: 100%; max-height: 360px; border-radius: 8px; border: 1px solid var(--line); margin: 6px 0; }
 .answer-img { color: var(--muted); font-style: italic; }
 .answer-img.failed { color: var(--error); }
+
+/* ---- Tools panel ---- */
+.tools-section { padding: 6px 0 14px; }
+.tools-section h3 { margin: 4px 0 2px; font-size: 13px; }
+.tools-section .small { margin: 0 0 6px; font-size: 11px; }
+.badge { align-self: center; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.badge.connected { color: var(--teal, #3ab8a8); border-color: currentColor; }
+.badge.failed, .badge.needs-auth { color: var(--error); border-color: currentColor; }
+.error-text { color: var(--error); white-space: pre-wrap; word-break: break-word; }
+.chips.folders { padding-bottom: 4px; }
