@@ -714,6 +714,9 @@ function modeMenu(): void {
   });
 }
 
+/** Which provider group the model menu shows. Kept while the chat is open: most people use one provider. */
+let modelTab: ModelRow["family"] | "all" = "all";
+
 function modelMenu(): void {
   openMenu(modelBtn, (box) => {
     const refresh = el("button", "item");
@@ -728,14 +731,43 @@ function modelMenu(): void {
     search.type = "search";
     search.placeholder = "Filter models…";
     const list = el("div");
+    const tabs = el("div", "tabs");
+    tabs.setAttribute("role", "tablist");
+    const groups: Array<[string, ModelRow["family"], string]> = [["OpenCode Zen", "zen", "Zen"], ["OpenCode Go", "go", "Go"], ["Other providers", "other", "Other"]];
     const paint = () => {
       const q = search.value.trim().toLowerCase();
+      const matches = (m: ModelRow): boolean => q === "" || `${m.label} ${m.ref}`.toLowerCase().includes(q);
+      // one tab for each provider group that has models, with how many, and "All"
+      tabs.replaceChildren();
+      const tab = (label: string, key: ModelRow["family"] | "all", count: number): void => {
+        const b = el("button", `tab${modelTab === key ? " on" : ""}`, label);
+        b.type = "button";
+        b.dataset.family = key;
+        b.setAttribute("role", "tab");
+        b.setAttribute("aria-selected", String(modelTab === key));
+        b.append(el("span", "count", String(count)));
+        b.addEventListener("click", (e) => {
+          // the button is replaced by the repaint: the page-wide click handler must not take it for a click outside the menu
+          e.stopPropagation();
+          modelTab = key;
+          paint();
+        });
+        tabs.append(b);
+      };
+      tab("All", "all", models.filter(matches).length);
+      for (const [, family, short] of groups) {
+        const n = models.filter((m) => m.family === family && matches(m)).length;
+        if (models.some((m) => m.family === family)) tab(short, family, n);
+      }
       list.replaceChildren();
-      const groups: Array<[string, ModelRow["family"]]> = [["OpenCode Zen", "zen"], ["OpenCode Go", "go"], ["Other providers", "other"]];
       for (const [title, family] of groups) {
-        const rows = models.filter((m) => m.family === family && (q === "" || `${m.label} ${m.ref}`.toLowerCase().includes(q))).slice(0, family === "other" ? 40 : 200);
+        if (modelTab !== "all" && modelTab !== family) continue;
+        const rows = models.filter((m) => m.family === family && matches(m)).slice(0, family === "other" ? 40 : 200);
         if (rows.length === 0) continue;
-        list.append(el("div", "group", title));
+        const head = el("div", "group", title);
+        head.dataset.family = family;
+        head.append(el("span", "count", String(rows.length)));
+        list.append(head);
         for (const row of rows) {
           const item = el("button", `item${row.ref === model ? " on" : ""}`);
           item.type = "button";
@@ -753,7 +785,7 @@ function modelMenu(): void {
     };
     search.addEventListener("input", paint);
     paint();
-    box.append(search, list);
+    box.append(search, tabs, list);
   });
 }
 

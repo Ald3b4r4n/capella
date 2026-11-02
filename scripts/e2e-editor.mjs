@@ -746,7 +746,14 @@ try {
   await evalWeb("(() => { d.getElementById('modelBtn').click(); return true; })()");
   const menuInfo = await waitFor("the model menu", () => evalWeb("(() => { const m = d.getElementById('menu'); return m.hidden ? null : { groups: [...m.querySelectorAll('.group')].map(g => g.textContent), items: m.querySelectorAll('.item').length }; })()"), 10000);
   console.log("model menu:", JSON.stringify(menuInfo));
-  check("the model menu groups Zen and Go models", menuInfo.groups.includes("OpenCode Zen") && menuInfo.groups.includes("OpenCode Go"), JSON.stringify(menuInfo.groups));
+  check("the model menu groups Zen and Go models, each under a band with its count", menuInfo.groups.some((g) => /^OpenCode Zen\d+$/.test(g)) && menuInfo.groups.some((g) => /^OpenCode Go\d+$/.test(g)), JSON.stringify(menuInfo.groups));
+  const tabInfo = await evalWeb("[...d.querySelectorAll('#menu .tab')].map(t => t.firstChild.textContent + ':' + t.dataset.family + (t.classList.contains('on') ? '*' : ''))");
+  check("the menu has a tab for All and for each provider, All selected", tabInfo.length >= 3 && tabInfo[0] === "All:all*" && tabInfo.some((x) => x.startsWith("Zen:zen")) && tabInfo.some((x) => x.startsWith("Go:go")), JSON.stringify(tabInfo));
+  await evalWeb("(() => { [...d.querySelectorAll('#menu .tab')].find(t => t.dataset.family === 'zen').click(); return true; })()");
+  const onlyZen = await evalWeb("[...d.querySelectorAll('#menu .group')].map(g => g.dataset.family)");
+  check("choosing a provider tab shows only that provider, and the menu stays open", onlyZen.length === 1 && onlyZen[0] === "zen" && (await evalWeb("!d.getElementById('menu').hidden")), JSON.stringify(onlyZen));
+  await shot("05a-model-menu-zen-tab");
+  await evalWeb("(() => { [...d.querySelectorAll('#menu .tab')].find(t => t.dataset.family === 'all').click(); return true; })()");
   await evalWeb(`(() => { const s = d.querySelector('#menu input'); s.value = ${JSON.stringify(modelTail.replace(/-free$/, ""))}; s.dispatchEvent(new Event('input')); return true; })()`);
   await sleep(400);
   await shot("05-model-menu");

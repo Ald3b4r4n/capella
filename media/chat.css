@@ -121,10 +121,22 @@ textarea::placeholder { color: color-mix(in srgb, var(--fg) 58%, var(--bg)); opa
 
 .menu { position: fixed; z-index: 5; min-width: 260px; max-width: calc(100vw - 24px); max-height: 60vh; overflow-y: auto; background: var(--raised); border: 1px solid var(--line); border-radius: var(--r); box-shadow: 0 8px 28px rgba(0,0,0,.4); padding: 6px; }
 .menu input { width: 100%; margin-bottom: 6px; background: var(--input-bg); color: inherit; border: 1px solid var(--line); border-radius: 7px; padding: 4px 8px; font: inherit; }
-.menu .group { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin: 8px 6px 2px; }
+.menu .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 6px; }
+.menu .tab { border: 1px solid var(--edge); background: color-mix(in srgb, var(--fg) 5%, transparent); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: color-mix(in srgb, var(--fg) 90%, var(--bg)); }
+.menu .tab:hover { color: var(--fg); border-color: color-mix(in srgb, var(--fg) 62%, var(--bg)); }
+.menu .tab .count { margin-left: 6px; font-size: 10px; opacity: 0.75; }
+.menu .tab.on { font-weight: 600; background: var(--gold); border-color: var(--gold); color: #1d1708; }
+.menu .tab.on[data-family="zen"] { background: var(--zen); border-color: var(--zen); color: #0d1626; }
+.menu .tab.on[data-family="go"] { background: var(--teal); border-color: var(--teal); color: #031f1c; }
+/* a provider group is a band of its own colour that stays at the top while its models scroll */
+.menu .group { --fam: var(--muted); position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; margin: 10px 0 4px; padding: 5px 8px 5px 10px; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--fg); background: color-mix(in srgb, var(--fam) 18%, var(--raised)); border-left: 3px solid var(--fam); border-radius: 6px; }
+.menu .group[data-family="zen"] { --fam: var(--zen); }
+.menu .group[data-family="go"] { --fam: var(--teal); }
+.menu .group[data-family="other"] { --fam: var(--gold); }
+.menu .group .count { font-size: 11px; font-weight: 600; letter-spacing: 0; padding: 0 8px; border-radius: 999px; background: color-mix(in srgb, var(--fg) 12%, transparent); }
 .menu .item { display: block; width: 100%; text-align: left; background: none; border: 0; border-radius: 7px; padding: 5px 8px; }
 .menu .item:hover, .menu .item:focus-visible { background: var(--gold-soft); }
-.menu .item.on { box-shadow: inset 2px 0 0 var(--gold); }
+.menu .item.on { background: var(--gold-soft); box-shadow: inset 3px 0 0 var(--gold); }
 .menu .item small { display: block; color: var(--muted); }
 .tag { font-size: 10px; border-radius: 4px; padding: 0 5px; margin-left: 6px; color: #121212; }
 .tag.zen { background: var(--zen); } .tag.go { background: var(--teal); } .tag.free { background: var(--gold); }
