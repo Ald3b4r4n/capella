@@ -1,0 +1,17 @@
+src/**
+scripts/**
+docs/**
+node_modules/**
+tsconfig.json
+esbuild.mjs
+**/*.map
+.gitignore
+spike-output/**
+.git/**
+*.vsix
+test/**
+dist-test/**
+esbuild.test.mjs
+.claude/**
+branding/**
+spike-output/**

@@ -1,0 +1,20 @@
+{
+  "version": "1.19.5",
+  "usedRoutes": [
+    "GET /config",
+    "GET /config/providers",
+    "GET /event",
+    "GET /global/health",
+    "GET /permission",
+    "GET /session",
+    "GET /session/{sessionID}",
+    "GET /session/{sessionID}/message",
+    "PATCH /session/{sessionID}",
+    "POST /session",
+    "POST /session/{sessionID}/abort",
+    "POST /session/{sessionID}/fork",
+    "POST /session/{sessionID}/permissions/{permissionID}",
+    "POST /session/{sessionID}/prompt_async"
+  ],
+  "fingerprint": "8178bea023b7"
+}

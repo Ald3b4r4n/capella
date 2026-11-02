@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.vsix
+.vscode-test/
+spike-output/
+.env
+*.log
+dist-test/
+test/contract/.tmp/
+.claude/
+branding/candidates/
+branding/round2/

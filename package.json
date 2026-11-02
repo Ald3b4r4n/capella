@@ -1,0 +1,216 @@
+{
+  "name": "capella",
+  "displayName": "Capella",
+  "description": "Open-source editor interface for opencode 1.x and 2.x (Zen and Go): chat, approvals, diffs, usage and web access inside VS Code and its forks.",
+  "version": "0.1.0",
+  "publisher": "ald3b4r4n",
+  "author": {
+    "name": "Antonio Rafael Souza Cruz de Noronha",
+    "url": "https://www.antoniorafael.com.br/"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Ald3b4r4n/capella.git"
+  },
+  "homepage": "https://github.com/Ald3b4r4n/capella",
+  "bugs": {
+    "url": "https://github.com/Ald3b4r4n/capella/issues"
+  },
+  "icon": "media/capella.png",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode zen",
+    "opencode go",
+    "agent",
+    "chat"
+  ],
+  "main": "./dist/extension.cjs",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "capella",
+          "title": "Capella",
+          "icon": "media/capella-activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "capella": [
+        {
+          "id": "capella.launcher",
+          "name": "Capella"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "capella.launcher",
+        "contents": "Capella, an editor interface for opencode (Zen and Go).\n\n[Open Capella](command:capella.open)\n\n[Show Zen/Go usage](command:capella.showUsage)\n\n[Set up local voice](command:capella.setupVoice)\\n\\n[Compatibility diagnostics](command:capella.diagnostics)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "capella.open",
+        "title": "Capella: Open"
+      },
+      {
+        "command": "capella.showUsage",
+        "title": "Capella: Show Zen/Go usage"
+      },
+      {
+        "command": "capella.refreshUsage",
+        "title": "Capella: Refresh Zen/Go usage"
+      },
+      {
+        "command": "capella.diagnostics",
+        "title": "Capella: Compatibility diagnostics"
+      },
+      {
+        "command": "capella.setupVoice",
+        "title": "Capella: Set up local voice (faster-whisper)"
+      }
+    ],
+    "configuration": {
+      "title": "Capella",
+      "properties": {
+        "capella.opencodePath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to the `opencode` executable. Leave empty to auto-detect (PATH, then common install locations). This setting can only be changed in your user settings, not by a folder you open, because it decides which program Capella starts.",
+          "scope": "machine"
+        },
+        "capella.updates.check": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Periodically compare the installed opencode version with the latest published one and warn when it is newer than the version Capella was tested with. Only the version number is requested; nothing about you or your project is sent. Capella never updates opencode by itself."
+        },
+        "capella.updates.intervalHours": {
+          "type": "number",
+          "default": 12,
+          "minimum": 1,
+          "markdownDescription": "Hours between opencode version checks."
+        },
+        "capella.usage.alerts": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Warn when the OpenCode Go 5-hour, weekly or monthly allowance reaches one of the thresholds below."
+        },
+        "capella.usage.alertThresholds": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "default": [
+            80,
+            95
+          ],
+          "markdownDescription": "Percentages that raise an alert for each window. Each fires once per window and re-arms when usage falls back below it."
+        },
+        "capella.usage.statusBar": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show the Go allowance in the status bar once Capella has been used in this window."
+        },
+        "capella.voice.engine": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "faster-whisper",
+            "windows"
+          ],
+          "enumDescriptions": [
+            "Use faster-whisper when it is set up, else Windows speech recognition when Windows has a recognizer for it.",
+            "Local Whisper on your CPU (more accurate; one-time setup of about 450 MB).",
+            "The speech recognition built into Windows (offline, nothing to install, lower quality; Windows needs a desktop speech recognizer installed, which not every PC has)."
+          ],
+          "markdownDescription": "Which engine turns your voice into text. Audio never leaves your computer with either engine."
+        },
+        "capella.voice.language": {
+          "type": "string",
+          "default": "auto",
+          "markdownDescription": "Spoken language: `auto` (Whisper detects it; Windows speech uses the editor language), a code such as `pt` or `en`, or a locale such as `pt-BR`."
+        },
+        "capella.voice.model": {
+          "type": "string",
+          "default": "base",
+          "enum": [
+            "tiny",
+            "base",
+            "small"
+          ],
+          "enumDescriptions": [
+            "About 75 MB. Fastest, makes more mistakes.",
+            "About 145 MB. A good balance on a CPU.",
+            "About 465 MB. More accurate, slower, needs more memory."
+          ],
+          "markdownDescription": "Whisper model for faster-whisper. Changing it needs `Capella: Set up local voice` to download the new model."
+        },
+        "capella.voice.home": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Folder where local voice (the private Python environment and the model, about 450 MB) is installed. Empty uses the standard per-user location. Set by `Capella: Set up local voice` when you choose a folder. This setting can only be changed in your user settings, not by a folder you open, because it decides which program Capella starts.",
+          "scope": "machine"
+        },
+        "capella.voice.pythonPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Python 3.9+ used to create the private environment. Empty looks for `py -3`, `python` and `python3`. This setting can only be changed in your user settings, not by a folder you open, because it decides which program Capella starts.",
+          "scope": "machine"
+        },
+        "capella.voice.maxSeconds": {
+          "type": "number",
+          "default": 120,
+          "minimum": 5,
+          "maximum": 600,
+          "markdownDescription": "Longest single dictation, in seconds. Recording stops by itself at this length."
+        },
+        "capella.voice.idleMinutes": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "markdownDescription": "The Whisper worker is stopped after this many idle minutes to give its memory back."
+        },
+        "capella.dev.voice": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Development only: fake recorder and transcriber (no microphone, no engine)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "package": "vsce package --no-dependencies",
+    "test": "node --test test/unit/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.0"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Capella runs opencode, an agent that reads files and can run commands in the open folder, so it stays off until you trust the folder."
+    }
+  }
+}
