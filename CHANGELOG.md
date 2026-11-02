@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.6 (unreleased)
+## 0.1.6 (2026-11-02)
 
 - **MCP manager, complete:** servers added in Capella can be given environment variables or headers (values typed masked and kept only in the editor's secret storage, never shown again), **Edit**ed (command, address, working folder, variables, headers) and **Test**ed; a server that needs a login gets a **Sign in** button. The confirmation lists names, never values; a missing secret stops a server from starting half-configured. What was stored by 0.1.4 is read as before.
 - The MCP code moved out of the chat panel into `src/ui/mcpManager.ts` (the editor's boxes and questions) and `src/ui/mcpStore.ts` (what is stored and how it becomes opencode's configuration; pure and unit-tested).
