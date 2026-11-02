@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.8 (unreleased)
+## 0.1.8 (2026-11-02)
 
 - **Fix:** "Could not start opencode: GET /api/model: HTTP 503 … Location plugins did not finish activating". A server that has just started answers 503 `ServiceUnavailableError` while its plugins and MCP servers come up (seen on a machine with many of them); the chat gave up at the first answer. A request that gets that answer is now repeated after a short wait, for up to a minute, and after 6 seconds the chat says opencode is still starting its plugins instead of looking stuck. Any other error is still an error at once.
 
