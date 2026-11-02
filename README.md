@@ -18,6 +18,9 @@ An editor interface for [opencode](https://opencode.ai), with its **Zen** (pay a
 - File edits: each edit card shows its diff, `Changes (n)` lists every file the chat changed against how it was before the chat, and Open diff uses the editor's own diff view. Capella computes these itself (opencode's diff endpoint returned nothing in testing). Only edits made by opencode's edit and write tools are seen; changes made by shell commands are not.
 - Voice dictation (Windows): the microphone button records in the extension host, transcribes on your computer with faster-whisper (or Windows speech), and puts the text in the message box for you to review; nothing is sent by itself. If Antares already set up local voice, Capella offers to reuse it instead of downloading ~450 MB again. See `docs/VOICE.md`.
 - opencode 1.x and 2.x, through one backend interface. The generation is detected when the server starts (2.x answers `/api/info`, 1.x `/global/health`). On 1.x there is no usage meter, and a rejection cannot carry a note. See `docs/PROTOCOL-NOTES.md`.
+- **Preview** button: open a dev server a tool printed, an address you type, or an HTML file of the folder, which Capella serves read-only on 127.0.0.1 (no dotfiles, nothing outside the folder, only this computer) while the chat is open.
+- **Effort** chip for models that have reasoning-effort options, a **Web** chip (follow the mode, always allow, or off for this chat) and a button that reads the model list again; the list also refreshes by itself when opencode says the catalog or your account changed, and a new or vanished model is said in words.
+- The view follows the answer while it streams, stops only when you scroll up yourself, and a jump button brings you back; a finished answer has one **Copy answer** button.
 - opencode is started per chat window on a random local port with a password only Capella knows.
 
 ## Not built yet
@@ -28,6 +31,7 @@ Zen balance (the API exposes only budgets), undo of changes, voice recording on 
 
 - With opencode 1.x: attachments, diffs and the preview button, and any version other than 1.19.5.
 - Voice with a real microphone, and the Windows speech engine, inside Capella (the recorder and transcriber were checked with fakes and with synthesized speech).
+- The `/` command palette, queueing messages while a turn runs, adding extra folders, a checklist for the task tool, images in answers, and the skills/MCP/plugin managers of Antares are not built yet.
 - The voice setup wizard (it runs `pip` and downloads a model) and the "reuse Antares" dialog were not clicked through.
 - A real free-model usage cap: opencode exposes no remaining quota for free models, so Capella keeps its own count and only recognises a cap when the provider refuses a call.
 - macOS and Linux (only Windows was available).

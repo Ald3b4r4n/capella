@@ -23,6 +23,7 @@ export function chatHtml(options: ChatHtmlOptions): string {
   <div class="brand"><img src="${escapeHtml(mediaUri("capella.svg"))}" alt="" width="20" height="20"><span>Capella</span><span id="version" class="faint"></span></div>
   <div class="top-right">
     <span id="usage" class="usage" hidden></span>
+    <button id="previewBtn" class="ghost" title="Open a page in the editor's browser: a dev server, an address, or an HTML file of this folder">Preview</button>
     <button id="changesBtn" class="ghost" hidden title="Files this chat changed">Changes</button>
     <button id="historyBtn" class="ghost" title="Continue or fork a stored chat of this folder">History</button>
     <button id="newChat" class="ghost" title="Start a new chat">New chat</button>
@@ -52,6 +53,7 @@ export function chatHtml(options: ChatHtmlOptions): string {
     <p>Capella talks to your local <b>opencode</b>, with Zen and Go models. Plan mode is on: it reads, it does not change anything.</p>
   </section>
 </main>
+<button id="jumpBottom" class="jump-bottom" hidden title="Scroll to the latest message" aria-label="Scroll to the latest message">\u2193</button>
 <div id="notice" class="notice" role="status" hidden></div>
 <div id="voiceStatus" class="notice voice" role="status" hidden></div>
 <footer class="composer">
@@ -62,6 +64,8 @@ export function chatHtml(options: ChatHtmlOptions): string {
       <button id="plusBtn" class="chip plus" title="Attach files, the current file or a selection" aria-label="Attach">+</button>
       <button id="modeBtn" class="chip" title="Permission mode (Shift+Tab cycles)"></button>
       <button id="modelBtn" class="chip" title="Model"></button>
+      <button id="webBtn" class="chip" title="Web access of this chat"></button>
+      <button id="effortBtn" class="chip" hidden title="Reasoning effort of this model"></button>
       <button id="micBtn" class="chip mic" title="Dictate: speak, click again to stop (Esc cancels). Recorded and transcribed on your computer." aria-label="Dictate" aria-pressed="false">
         <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5" fill="currentColor"/><path d="M3 8a5 5 0 0 0 10 0M8 13v2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
       </button>

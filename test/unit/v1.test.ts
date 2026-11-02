@@ -220,3 +220,32 @@ test("stored chats on 1.x: list, resume under the current mode, fork", async () 
   assert.deepEqual(patch?.body.permission, v1Rules(modeById("plan")), "the stored chat gets this chat's rules, whatever it had");
   assert.equal(await session.fork("ses_old"), "ses_fork");
 });
+
+test("on 1.x the effort rides on each prompt as `variant`", async () => {
+  const { session, events } = make("review");
+  await session.setModel("opencode/m1");
+  await session.setEffort("low");
+  await session.send("hello");
+  await until(events, "turn-ended");
+  const prompt = (await calls(session)).find((c) => c.path.endsWith("/prompt_async"));
+  assert.equal(prompt?.body.variant, "low");
+});
+
+test("a spent free allowance (status retry, as 1.19.5 sends it) ends the turn once as a flagged failure, and the abort that follows adds nothing", () => {
+  const mapper = new V1EventMapper();
+  const retry = frame("session.status", { sessionID: S, status: { type: "retry", attempt: 1, message: "Free usage exceeded, subscribe to Go", action: { reason: "free_tier_limit", provider: "opencode" } } });
+  const events = run(mapper, [
+    frame("session.status", { sessionID: S, status: { type: "busy" } }),
+    retry,
+    retry,
+    frame("session.error", { sessionID: S, error: { name: "MessageAbortedError", data: { message: "aborted" } } }),
+    frame("session.idle", { sessionID: S }),
+  ]);
+  assert.deepEqual(events.map((e) => e.type), ["turn-started", "turn-ended"]);
+  const ended = events[1] as Extract<ChatEvent, { type: "turn-ended" }>;
+  assert.equal(ended.outcome, "failed");
+  assert.equal(ended.error?.rateLimited, true);
+  // a transient retry is not an ending
+  const other = run(new V1EventMapper(), [frame("session.status", { sessionID: S, status: { type: "busy" } }), frame("session.status", { sessionID: S, status: { type: "retry", attempt: 1, message: "overloaded" } })]);
+  assert.deepEqual(other.map((e) => e.type), ["turn-started"]);
+});

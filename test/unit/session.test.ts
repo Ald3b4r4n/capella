@@ -165,3 +165,66 @@ test("ids from the page are checked before they become part of a URL path", asyn
   await assert.rejects(session.fork("../config"), /not a valid session id/);
   await assert.rejects(session.resume("ses_old/../x"), /not a valid session id/);
 });
+
+test("the model list is read again on request and when the server says it changed; a failed read keeps the old list and says so", async () => {
+  const { session, events } = make();
+  await session.start();
+  const call = (body: unknown) => (session as unknown as { client: OpencodeClient }).client.post("/api/test", body);
+  const catalogEvents = () => events.filter((e): e is Extract<SessionEvent, { type: "catalog" }> => e.type === "catalog");
+
+  await call({ models: [{ id: "m1", modelID: "m1", providerID: "opencode", name: "Zen One Free" }, { id: "m3", modelID: "m3", providerID: "opencode", name: "Zen Three" }] });
+  await session.refreshModels();
+  assert.deepEqual([catalogEvents().at(-1)?.added, catalogEvents().at(-1)?.removed], [["opencode/m3"], ["opencode-go/m2"]]);
+  assert.deepEqual(session.models.map((m) => m.modelId), ["m1", "m3"]);
+
+  await call({ fail: true });
+  await session.refreshModels();
+  assert.match(catalogEvents().at(-1)?.stale ?? "", /catalog unavailable|500/);
+  assert.deepEqual(session.models.map((m) => m.modelId), ["m1", "m3"], "the last good list is kept");
+
+  await call({ fail: false, models: [] });
+  await session.refreshModels();
+  assert.match(catalogEvents().at(-1)?.stale ?? "", /empty/);
+  assert.equal(session.models.length, 2, "an empty list after a good one is a failure, not 'no models'");
+
+  // The server announcing an update makes Capella read again, once, after the burst settles.
+  await call({ models: [{ id: "m1", modelID: "m1", providerID: "opencode", name: "Zen One Free" }] });
+  const before = catalogEvents().length;
+  await session.setModel("opencode/m1"); // makes sure an event stream is open and a session exists
+  await call({ emit: "provider.updated" });
+  await call({ emit: "model.updated" });
+  const deadline = Date.now() + 6000;
+  while (catalogEvents().length === before && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+  assert.equal(catalogEvents().length, before + 1, "two announcements, one read");
+  assert.deepEqual(catalogEvents().at(-1)?.removed, ["opencode/m3"]);
+});
+
+test("the reasoning effort is one of the model's own variants, travels with the model, and resets when the model changes", async () => {
+  const { session, events } = make({ model: "opencode/m1" });
+  await session.start();
+  await assert.rejects(session.setEffort("extreme"), /not one of this model's options/);
+  await session.send("one");
+  await until(events, "turn-ended");
+  await session.setEffort("high");
+  assert.equal(session.effort, "high");
+  const client = (session as unknown as { client: OpencodeClient }).client;
+  const models = (await client.get<Array<{ path: string; body: { model?: { id?: string; variant?: string } } }>>("/api/calls")).filter((c) => c.path.endsWith("/model"));
+  assert.equal(models.at(-1)?.body.model?.variant, "high");
+  await session.setModel("opencode-go/m2");
+  assert.equal(session.effort, undefined, "a variant belongs to one model");
+  await session.setEffort(undefined).catch(() => undefined);
+});
+
+test("web access is sent as rules: at creation, and replacing the mode's on a live session", async () => {
+  const { session, events } = make({ mode: "review" });
+  await session.setWeb("deny");
+  await session.send("hi");
+  await until(events, "turn-ended");
+  const client = (session as unknown as { client: OpencodeClient }).client;
+  const get = () => client.get<Array<{ method: string; path: string; body: { permissions?: Array<{ action: string; effect: string }> } }>>("/api/calls");
+  const created = (await get()).find((c) => c.method === "POST" && c.path === "/api/session");
+  assert.deepEqual(created?.body.permissions?.filter((r) => /^web/.test(r.action)).map((r) => r.effect), ["deny", "deny"]);
+  await session.setWeb("mode");
+  const patch = (await get()).filter((c) => c.method === "PATCH").at(-1);
+  assert.deepEqual(patch?.body.permissions?.filter((r) => /^web/.test(r.action)).map((r) => r.effect), ["ask", "ask"], "back to the mode's own rule");
+});

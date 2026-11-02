@@ -83,7 +83,7 @@ const server = createServer(async (req, res) => {
   if (req.method === "GET" && path === "/config/providers")
     return json(res, 200, {
       providers: [
-        { id: "opencode", name: "OpenCode", options: { apiKey: "SECRET-KEY" }, models: { m1: { id: "m1", name: "Zen One Free", cost: { input: 0, output: 0 }, capabilities: { input: { text: true, image: true } }, limit: { context: 1000 } } } },
+        { id: "opencode", name: "OpenCode", options: { apiKey: "SECRET-KEY" }, models: { m1: { id: "m1", name: "Zen One Free", variants: { low: {}, high: {} }, cost: { input: 0, output: 0 }, capabilities: { input: { text: true, image: true } }, limit: { context: 1000 } } } },
         { id: "opencode-go", name: "Go", options: { apiKey: "SECRET-KEY" }, models: { m2: { id: "m2", name: "Go Two", cost: { input: 1, output: 2 }, capabilities: { input: { text: true, image: false } } } } },
       ],
       default: { opencode: "m1" },

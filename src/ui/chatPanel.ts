@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { appendFileSync } from "node:fs";
 import * as vscode from "vscode";
 import { ChangeTracker } from "./changes.ts";
 import type { OriginalProvider } from "./originalProvider.ts";
@@ -9,6 +10,7 @@ import { MAX_ATTACHMENTS, decodeBase64, describeSize, fromBytes, fromSelection, 
 import { describeAge } from "../opencode/history.ts";
 import { locateOpencode } from "../opencode/locate.ts";
 import { localPreviewUrl } from "./preview.ts";
+import { extractLocalUrls, isPreviewableUrl, startPreviewServer, type PreviewServer } from "./staticServer.ts";
 import { MODES, DEFAULT_MODE, modeById, type ModeId } from "../opencode/modes.ts";
 import { OpencodeSession, type SessionEvent } from "../opencode/session.ts";
 import { chatHtml } from "./chatHtml.ts";
@@ -40,6 +42,10 @@ export class ChatPanel {
   /** `providerID/modelID` the user picked; remembered across new chats. */
   private model?: string;
   private busy = false;
+  /** Local addresses a tool printed (a dev server's banner), newest last, so Preview can offer them. */
+  private localUrls: string[] = [];
+  private previewServer: PreviewServer | undefined;
+  private previewConfirmed = false;
   private readonly voice: VoiceBridge;
   /** Serves the "before" side of diffs; set once when the extension activates. */
   static originals: OriginalProvider | undefined;
@@ -117,7 +123,7 @@ export class ChatPanel {
   private modelRows(session: OpencodeSession): ModelRow[] {
     const order = { zen: 0, go: 1, other: 2 } as const;
     return session.models
-      .map((m) => ({ ref: `${m.providerId}/${m.modelId}`, label: m.label, family: m.family, free: m.free, images: m.images }))
+      .map((m) => ({ ref: `${m.providerId}/${m.modelId}`, label: m.label, family: m.family, free: m.free, images: m.images, variants: m.variants }))
       .sort((a, b) => order[a.family] - order[b.family] || a.label.localeCompare(b.label));
   }
 
@@ -139,9 +145,11 @@ export class ChatPanel {
     session.on("event", (event: SessionEvent) => {
       if (event.type === "turn-started") this.busy = true;
       if (event.type === "turn-ended" || event.type === "server-exit") this.busy = false;
+      if (event.type === "catalog") return this.onCatalog(event, session);
       this.post({ type: "event", event });
       this.countFreeUsage(event, session);
       if (event.type !== "resync" && event.type !== "server-exit") this.trackChanges(event);
+      if (event.type === "tool-result") for (const url of extractLocalUrls(event.text)) if (!this.localUrls.includes(url)) this.localUrls.push(url);
       // A finished turn is the moment the numbers moved; the tracker rate-limits the actual request.
       if (event.type === "turn-ended") void this.tracker.refresh(session);
     });
@@ -219,12 +227,29 @@ export class ChatPanel {
     const at = Date.now();
     this.changeQueue = this.changeQueue
       .then(async () => {
+        const skippedBefore = tracker.skipped.length;
         const change = await tracker.handle(event, at);
+        for (const reason of tracker.skipped.slice(skippedBefore)) this.trace(`changes: not tracked: ${reason}`);
+        if (event.type === "tool-result") this.trace(`changes: ${event.callId} result -> ${change ? `${change.rel} ${change.status} +${change.additions} -${change.deletions}` : "no change recorded"}`);
         if (!change || tracker !== this.changes) return;
         this.post({ type: "fileChange", change });
         this.post({ type: "changes", rows: await tracker.rows() });
       })
       .catch((error) => this.output.appendLine(`change tracking failed: ${error instanceof Error ? error.message : String(error)}`));
+  }
+
+  /** A line for the Capella output channel; also appended to the file named by CAPELLA_TRACE_FILE (a development aid for the end-to-end run). */
+  private trace(line: string): void {
+    this.output.appendLine(line);
+    const file = process.env.CAPELLA_TRACE_FILE;
+    if (file) {
+      try {
+        appendFileSync(file, `${new Date().toISOString()} ${line}
+`);
+      } catch {
+        // a development aid must never break the chat
+      }
+    }
   }
 
   private async openChange(id: string, diff: boolean): Promise<void> {
@@ -341,6 +366,62 @@ export class ChatPanel {
     });
   }
 
+  /** Opens an address the USER chose (typed, or an HTML file of this folder served here): any http(s) address is allowed. */
+  private async openChosen(url: string): Promise<void> {
+    if (!isPreviewableUrl(url)) {
+      this.notice("Only http and https addresses can be previewed.", true);
+      return;
+    }
+    try {
+      await vscode.commands.executeCommand("simpleBrowser.show", url);
+    } catch {
+      await vscode.env.openExternal(vscode.Uri.parse(url));
+    }
+  }
+
+  /** Preview: a dev server address a tool printed, an address you type, or an HTML file of this folder (served read-only on 127.0.0.1). */
+  private async previewMenu(): Promise<void> {
+    type Pick = vscode.QuickPickItem & { act: "url" | "type" | "file"; url?: string };
+    const items: Pick[] = [
+      ...this.localUrls.slice(-5).reverse().map((url): Pick => ({ label: url, description: "printed by a tool in this chat", act: "url", url })),
+      { label: "Open an address…", description: "an http or https address you type", act: "type" },
+      { label: "Preview an HTML file from this folder…", description: "served read-only on 127.0.0.1 while this chat is open", act: "file" },
+    ];
+    const picked = await vscode.window.showQuickPick(items, { title: "Preview a page in the editor", placeHolder: "Pick what to open" });
+    if (!picked) return;
+    if (picked.act === "url" && picked.url) return this.openChosen(picked.url);
+    if (picked.act === "type") {
+      const url = await vscode.window.showInputBox({ title: "Open an address in the editor", prompt: "http or https", value: this.localUrls.at(-1) ?? "http://localhost:3000/", validateInput: (v) => (isPreviewableUrl(v) ? undefined : "Use an http:// or https:// address.") });
+      if (url) await this.openChosen(url);
+      return;
+    }
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder) {
+      this.notice("Open a folder first.", true);
+      return;
+    }
+    const found = await vscode.workspace.findFiles(new vscode.RelativePattern(folder, "**/*.{html,htm}"), "**/{node_modules,.git,dist,build}/**", 200);
+    if (found.length === 0) {
+      this.notice("There is no HTML file in this folder to preview.");
+      return;
+    }
+    const files = found.map((uri) => vscode.workspace.asRelativePath(uri, false)).sort((a, b) => (a === "index.html" ? -1 : b === "index.html" ? 1 : a.localeCompare(b)));
+    const rel = await vscode.window.showQuickPick(files, { title: "Which page?", placeHolder: "An HTML file of this folder" });
+    if (!rel) return;
+    if (!this.previewConfirmed) {
+      const go = "Serve and preview";
+      const choice = await vscode.window.showInformationMessage("Serve this folder for the preview?", { modal: true, detail: `Capella will serve ${folder.uri.fsPath} read-only on 127.0.0.1 (this computer only) while this chat is open, so the page's own files load. Dotfiles such as .env and .git are never served.` }, go);
+      if (choice !== go) return;
+      this.previewConfirmed = true;
+    }
+    try {
+      this.previewServer ??= await startPreviewServer(folder.uri.fsPath);
+      await this.openChosen(this.previewServer.baseUrl + rel.split("/").map(encodeURIComponent).join("/"));
+    } catch (error) {
+      this.notice(`Could not start the preview: ${error instanceof Error ? error.message : String(error)}`, true);
+    }
+  }
+
   private async openPreview(url: string): Promise<void> {
     const local = localPreviewUrl(url);
     if (!local) {
@@ -352,6 +433,21 @@ export class ChatPanel {
     } catch {
       await vscode.env.openExternal(vscode.Uri.parse(local));
     }
+  }
+
+  /** The model list changed or was re-read: the picker gets it, and a change is said in words (ids), once. */
+  private onCatalog(event: Extract<SessionEvent, { type: "catalog" }>, session: OpencodeSession): void {
+    if (event.stale) {
+      this.notice(`The model list may be out of date: ${event.stale}. The last good list is kept.`, true);
+      return;
+    }
+    this.post({ type: "models", models: this.modelRows(session), model: this.model });
+    const list = (ids: string[]) => ids.slice(0, 4).join(", ") + (ids.length > 4 ? ` and ${ids.length - 4} more` : "");
+    const parts: string[] = [];
+    if (event.added.length > 0) parts.push(`New models: ${list(event.added)}.`);
+    if (event.removed.length > 0) parts.push(`No longer offered: ${list(event.removed)}.`);
+    if (this.model && event.removed.includes(this.model)) parts.push("The model this chat uses is no longer offered: pick another before the next message.");
+    if (parts.length > 0) this.notice(parts.join(" "), !!this.model && event.removed.includes(this.model));
   }
 
   private async sendInit(): Promise<void> {
@@ -404,6 +500,7 @@ export class ChatPanel {
           await this.session?.setModel(message.ref);
           this.model = message.ref;
           this.post({ type: "model", ref: message.ref });
+          this.post({ type: "effort", effort: undefined });
           if (this.session) this.postModelNote(this.session);
           break;
         case "decide":
@@ -471,6 +568,37 @@ export class ChatPanel {
         case "openPreview":
           await this.openPreview(message.url);
           break;
+        case "setWeb": {
+          if (this.busy) {
+            this.notice("Wait for the current turn to finish before changing web access.", true);
+            break;
+          }
+          if (message.policy === "allow") {
+            const go = "Allow web access";
+            const choice = await vscode.window.showWarningMessage("Let this chat use the web without asking?", { modal: true, detail: "The agent will be able to search the web and fetch pages without asking you first. A page it reads can carry instructions meant to mislead it. Turn this off again at any time." }, go);
+            if (choice !== go) break;
+          }
+          await this.session?.setWeb(message.policy);
+          this.post({ type: "web", policy: this.session?.web ?? message.policy });
+          break;
+        }
+        case "setEffort":
+          if (this.busy) {
+            this.notice("Wait for the current turn to finish before changing the effort.", true);
+            break;
+          }
+          await this.session?.setEffort(message.effort);
+          this.post({ type: "effort", effort: this.session?.effort });
+          break;
+        case "refreshModels":
+          if (this.session) {
+            await this.session.refreshModels();
+            this.notice(`Model list read again: ${this.session.models.length} models.`);
+          }
+          break;
+        case "previewMenu":
+          await this.previewMenu();
+          break;
         case "openUsage": {
           // The address comes from the opencode server's own answer and was checked as https when it was read.
           const url = this.tracker.current?.workspace?.usageURL;
@@ -529,6 +657,7 @@ export class ChatPanel {
     const session = this.session;
     this.session = undefined;
     clearInterval(this.usageTimer);
+    void this.previewServer?.close();
     this.voice.dispose();
     for (const d of this.disposables.splice(0)) d.dispose();
     await session?.dispose();

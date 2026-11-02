@@ -70,6 +70,22 @@ export const MODES: readonly Mode[] = [
 
 export const DEFAULT_MODE: ModeId = "plan";
 
+/**
+ * Web access of a chat, on top of its mode: follow the mode (Plan and Bypass let the web tools through, Review and
+ * Accept edits ask), always allow them, or turn them off. It is a rule on the session like the mode's own; opencode's
+ * `websearch` and `webfetch` tools are not offered to a model when denied.
+ */
+export type WebPolicy = "mode" | "allow" | "deny";
+
+const WEB_ACTIONS = ["webfetch", "websearch"];
+
+/** The mode's rules with the web policy laid over them. `mode` changes nothing. */
+export function rulesWith(mode: Mode, web: WebPolicy): Rule[] {
+  if (web === "mode") return mode.rules;
+  const rest = mode.rules.filter((rule) => !WEB_ACTIONS.includes(rule.action));
+  return [...rest, ...WEB_ACTIONS.map((action): Rule => ({ action, resource: "*", effect: web === "deny" ? "deny" : "allow" }))];
+}
+
 /** A permission rule as opencode 1.x writes it. */
 export interface V1Rule {
   permission: string;
@@ -86,8 +102,9 @@ const V1_ACTIONS = ["edit", "bash", "webfetch", "websearch"] as const;
  * controls, with an explicit `allow` where the mode lets the action through: appended at the end, it overrides whatever
  * an earlier mode left, in both directions (an empty list would change nothing, and Bypass after Plan would stay Plan).
  */
-export function v1Rules(mode: Mode): V1Rule[] {
-  return V1_ACTIONS.map((permission) => ({ permission, pattern: "*", action: mode.rules.find((rule) => (rule.action === "shell" ? "bash" : rule.action) === permission)?.effect ?? "allow" }));
+export function v1Rules(mode: Mode, web: WebPolicy = "mode"): V1Rule[] {
+  const rules = rulesWith(mode, web);
+  return V1_ACTIONS.map((permission) => ({ permission, pattern: "*", action: rules.find((rule) => (rule.action === "shell" ? "bash" : rule.action) === permission)?.effect ?? "allow" }));
 }
 
 export function modeById(id: string | undefined): Mode {

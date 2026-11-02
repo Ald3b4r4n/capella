@@ -2,7 +2,7 @@ import type { Backend, ModelRef, PendingApproval, PromptFile } from "./backend.t
 import { ApiError, type OpencodeClient } from "./client.ts";
 import { mapFrame, mapModels, parseFrame, type MapResult, type ModelInfo } from "./events.ts";
 import { mapSessionRows, replayItems, type ReplayItem, type SessionRow } from "./history.ts";
-import { modeById, type ModeId } from "./modes.ts";
+import { modeById, rulesWith, type ModeId, type WebPolicy } from "./modes.ts";
 import { mapUsageLimits, type UsageSnapshot } from "./usage.ts";
 
 /** opencode 2.x: the `/api/*` routes, as measured on 2.2.5 (docs/PROTOCOL-NOTES.md). */
@@ -36,22 +36,22 @@ export class BackendV2 implements Backend {
     return typeof modelId === "string" && typeof providerId === "string" ? { providerId, modelId } : undefined;
   }
 
-  async createSession(mode: ModeId, model: ModelRef): Promise<string> {
+  async createSession(mode: ModeId, model: ModelRef, effort?: string, web: WebPolicy = "mode"): Promise<string> {
     const m = modeById(mode);
-    const created = await this.client.post<{ data?: { id?: string } }>("/api/session", { title: "Capella", agent: m.agent, permissions: m.rules });
+    const created = await this.client.post<{ data?: { id?: string } }>("/api/session", { title: "Capella", agent: m.agent, permissions: rulesWith(m, web) });
     const id = created?.data?.id;
     if (!id) throw new Error("opencode did not return a session id");
-    await this.selectModel(id, model);
+    await this.selectModel(id, model, effort);
     return id;
   }
 
-  async selectModel(sessionId: string, model: ModelRef): Promise<void> {
-    await this.client.post(`/api/session/${sessionId}/model`, { model: { id: model.modelId, providerID: model.providerId } });
+  async selectModel(sessionId: string, model: ModelRef, effort?: string): Promise<void> {
+    await this.client.post(`/api/session/${sessionId}/model`, { model: { id: model.modelId, providerID: model.providerId, ...(effort ? { variant: effort } : {}) } });
   }
 
-  async applyMode(sessionId: string, mode: ModeId): Promise<void> {
+  async applyMode(sessionId: string, mode: ModeId, web: WebPolicy = "mode"): Promise<void> {
     const m = modeById(mode);
-    await this.client.request("PATCH", `/api/session/${sessionId}`, { body: { permissions: m.rules } });
+    await this.client.request("PATCH", `/api/session/${sessionId}`, { body: { permissions: rulesWith(m, web) } });
     await this.client.post(`/api/session/${sessionId}/agent`, { agent: m.agent });
   }
 

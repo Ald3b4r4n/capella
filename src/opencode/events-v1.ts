@@ -70,6 +70,17 @@ export class V1EventMapper {
           this.failed = false;
           out.push(ev({ type: "turn-started", sessionId }));
         }
+        // A model's free allowance is spent: 1.x keeps retrying quietly and never ends the turn, so end it here (the
+        // backend then aborts the retry loop). Other retries are transient and stay silent.
+        if (status === "retry" && isRecord(props.status) && this.busy && !this.failed) {
+          const action = isRecord(props.status.action) ? props.status.action : {};
+          if (str(action.reason) === "free_tier_limit") {
+            this.busy = false;
+            this.failed = true;
+            const text = str(props.status.message) ?? str(action.message) ?? "Free usage exceeded";
+            out.push(ev({ type: "turn-ended", sessionId, outcome: "failed", error: { type: "FreeTierLimit", message: text, status: 429, rateLimited: true } }));
+          }
+        }
         return out.length > 0 ? out : [{ kind: "ignored" }];
       }
       case "session.idle":
@@ -81,6 +92,8 @@ export class V1EventMapper {
         }
         return [ev({ type: "turn-ended", sessionId, outcome: "succeeded" })];
       case "session.error": {
+        // The turn already ended as failed (a spent free allowance); the abort that stops its retries lands here.
+        if (this.failed) return [{ kind: "ignored" }];
         this.busy = false;
         this.failed = true;
         const error = mapV1Error(props.error);

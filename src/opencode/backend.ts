@@ -7,7 +7,7 @@
 import type { Generation } from "./compat.ts";
 import type { MapResult, ModelInfo } from "./events.ts";
 import type { ReplayItem, SessionRow } from "./history.ts";
-import type { ModeId } from "./modes.ts";
+import type { ModeId, WebPolicy } from "./modes.ts";
 import type { UsageSnapshot } from "./usage.ts";
 
 export interface ModelRef {
@@ -42,10 +42,11 @@ export interface Backend {
   /** The user's own default model, identifiers only. */
   defaultModel(): Promise<ModelRef | undefined>;
   /** A new session in the given mode, on the given model. Returns its id. */
-  createSession(mode: ModeId, model: ModelRef): Promise<string>;
-  selectModel(sessionId: string, model: ModelRef): Promise<void>;
+  createSession(mode: ModeId, model: ModelRef, effort?: string, web?: WebPolicy): Promise<string>;
+  /** `effort` is one of the model's own variants (`low`, `high`...); undefined is the model's default. */
+  selectModel(sessionId: string, model: ModelRef, effort?: string): Promise<void>;
   /** Replaces the permission rules (and agent) of a session with the mode's. */
-  applyMode(sessionId: string, mode: ModeId): Promise<void>;
+  applyMode(sessionId: string, mode: ModeId, web?: WebPolicy): Promise<void>;
   prompt(sessionId: string, text: string, files: readonly PromptFile[]): Promise<void>;
   interrupt(sessionId: string): Promise<void>;
   reply(sessionId: string, requestId: string, decision: "once" | "always" | "reject", message?: string): Promise<void>;

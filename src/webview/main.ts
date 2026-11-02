@@ -21,12 +21,16 @@ const usageEl = $<HTMLElement>("usage");
 const chipsEl = $<HTMLElement>("chips");
 const plusBtn = $<HTMLButtonElement>("plusBtn");
 const micBtn = $<HTMLButtonElement>("micBtn");
+const effortBtn = $<HTMLButtonElement>("effortBtn");
+const webBtn = $<HTMLButtonElement>("webBtn");
 const voiceStatus = $<HTMLElement>("voiceStatus");
 
 let modes: ModeRow[] = [];
 let models: ModelRow[] = [];
 let mode = "plan";
 let model: string | undefined;
+let effort: string | undefined;
+let web: "mode" | "allow" | "deny" = "mode";
 let busy = false;
 let attachments: AttachmentView[] = [];
 
@@ -45,10 +49,54 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, t
   return node;
 }
 
+/**
+ * Following the output. The view follows while the user has not scrolled away on purpose. "Near the bottom" is NOT used to
+ * decide that: content that shrinks for a moment (a block repainted, a card collapsing) moves the scroll position up
+ * without the user doing anything, and a check of the position would switch following off by itself (the Antares 0.1.3 bug).
+ * Only a real action (wheel up, an arrow or page key, dragging the scrollbar, touch) stops it; reaching the bottom again
+ * resumes it. A button offers the jump back.
+ */
+let following = true;
+const jump = $<HTMLButtonElement>("jumpBottom");
+const atBottom = (): boolean => timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 8;
+function paintJump(): void {
+  jump.hidden = following || atBottom();
+  timeline.dataset.following = String(following);
+}
+function scrollToEnd(): void {
+  // `instant`: the stylesheet smooths scrolling, and an animation that restarts on every token never catches up with the end.
+  timeline.scrollTo({ top: timeline.scrollHeight, behavior: "instant" });
+}
+function leave(): void {
+  following = false;
+  paintJump();
+}
+timeline.addEventListener("wheel", (e) => e.deltaY < 0 && leave(), { passive: true });
+timeline.addEventListener("touchmove", leave, { passive: true });
+timeline.addEventListener("keydown", (e) => ["ArrowUp", "PageUp", "Home"].includes(e.key) && leave());
+// A press on the scrollbar itself (the area right of the content) is a user action too.
+timeline.addEventListener("mousedown", (e) => e.offsetX > timeline.clientWidth && leave());
+// Resuming needs the view to MOVE DOWN to the end. Merely being near the end is not enough: a smooth scroll up starts
+// there, and its first events would otherwise switch following back on (measured in a real window).
+let lastTop = 0;
+timeline.addEventListener("scroll", () => {
+  if (timeline.scrollTop > lastTop && atBottom()) following = true;
+  lastTop = timeline.scrollTop;
+  paintJump();
+});
+jump.addEventListener("click", () => {
+  following = true;
+  scrollToEnd();
+  paintJump();
+});
+// Heights that change without any DOM change of ours (an image loading, the footer resizing) must keep the end in view too.
+new ResizeObserver(() => following && scrollToEnd()).observe(timeline);
+const content = new MutationObserver(() => following && scrollToEnd());
+content.observe(timeline, { childList: true, subtree: true, characterData: true });
+
 function stickToBottom<T>(action: () => T): T {
-  const nearBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 80;
   const result = action();
-  if (nearBottom) timeline.scrollTop = timeline.scrollHeight;
+  if (following) scrollToEnd();
   return result;
 }
 
@@ -73,6 +121,12 @@ function paintChips(): void {
   modeBtn.title = current?.description ?? "";
   const picked = models.find((m) => m.ref === model);
   modelBtn.textContent = picked ? picked.label : model ?? "Default model";
+  // The effort chip exists only for a model that offers variants.
+  const options = picked?.variants ?? [];
+  effortBtn.hidden = options.length === 0;
+  effortBtn.textContent = effort ? `Effort: ${effort}` : "Effort: default";
+  webBtn.textContent = web === "mode" ? "Web: per mode" : web === "allow" ? "Web: on" : "Web: off";
+  webBtn.dataset.tone = web === "deny" ? "plan" : web === "allow" ? "edit" : "";
 }
 
 /** The user's message with what went along: image thumbnails and file names. */
@@ -261,6 +315,20 @@ function approvalCard(event: Extract<SessionEvent, { type: "approval-requested" 
   approvals.set(event.requestId, card);
 }
 
+/** One Copy button under the last text of a finished turn: copies the whole answer (code blocks keep their own button). */
+function addCopyAnswer(finished: HTMLElement): void {
+  const parts = [...finished.querySelectorAll<HTMLElement>(".md")];
+  if (parts.length === 0 || finished.querySelector(".copy-answer")) return;
+  const button = el("button", "btn small copy-answer", "Copy answer");
+  button.type = "button";
+  button.addEventListener("click", () => {
+    post({ type: "copy", text: parts.map((p) => p.textContent ?? "").join("\n\n").trim() });
+    button.textContent = "Copied";
+    setTimeout(() => (button.textContent = "Copy answer"), 1200);
+  });
+  finished.append(button);
+}
+
 function explainError(error: Extract<SessionEvent, { type: "turn-ended" }>["error"]): string {
   if (!error) return "The turn failed. Check the Capella output channel.";
   if (error.rateLimited) return "Usage limit reached for this model" + (error.retryAfterMs ? " (the provider asked to wait " + Math.max(1, Math.round(error.retryAfterMs / 60000)) + " min)." : ". The provider did not say when it resets; try again later or pick another model.");
@@ -341,6 +409,7 @@ function onEvent(event: SessionEvent): void {
       case "turn-ended": {
         setBusy(false);
         turn?.classList.remove("live");
+        if (turn) addCopyAnswer(turn);
         if (turn && (tokens.input || tokens.output)) turn.append(el("div", "foot", `${tokens.input.toLocaleString()} in · ${tokens.output.toLocaleString()} out`));
         if (event.outcome === "failed") turn?.append(el("div", "error-line", explainError(event.error)));
         if (event.outcome === "interrupted") turn?.append(el("div", "foot", "Stopped"));
@@ -455,7 +524,8 @@ function replay(items: ReplayItem[]): void {
     blocks.clear();
     tools.clear();
   }
-  timeline.scrollTop = timeline.scrollHeight;
+  following = true;
+  scrollToEnd();
 }
 
 // ---- history ---------------------------------------------------------------------------------------------------
@@ -499,6 +569,7 @@ function paintSessions(rows: SessionRowView[]): void {
 }
 
 $<HTMLButtonElement>("historyBtn").addEventListener("click", openHistory);
+$<HTMLButtonElement>("previewBtn").addEventListener("click", () => post({ type: "previewMenu" }));
 $<HTMLButtonElement>("historyClose").addEventListener("click", () => (historyEl.hidden = true));
 historySearch.addEventListener("input", () => {
   window.clearTimeout(searchTimer);
@@ -591,7 +662,11 @@ usageEl.addEventListener("click", () => post({ type: "openUsage" }));
 
 // ---- menus ----------------------------------------------------------------------------------------------------
 
+/** The button that opened the menu: a click on it is the click that opened it, not an outside click that closes it. */
+let menuAnchor: HTMLElement | undefined;
+
 function openMenu(anchor: HTMLElement, build: (box: HTMLElement) => void): void {
+  menuAnchor = anchor;
   menu.replaceChildren();
   build(menu);
   menu.hidden = false;
@@ -622,6 +697,14 @@ function modeMenu(): void {
 
 function modelMenu(): void {
   openMenu(modelBtn, (box) => {
+    const refresh = el("button", "item");
+    refresh.type = "button";
+    refresh.append(el("span", undefined, "\u21bb Read the model list again"), el("small", undefined, "Asks opencode; no model is called"));
+    refresh.addEventListener("click", () => {
+      closeMenu();
+      post({ type: "refreshModels" });
+    });
+    box.append(refresh);
     const search = el("input");
     search.type = "search";
     search.placeholder = "Filter models…";
@@ -714,6 +797,44 @@ function plusMenu(): void {
 }
 plusBtn.addEventListener("click", plusMenu);
 
+function effortMenu(): void {
+  const options = models.find((m) => m.ref === model)?.variants ?? [];
+  openMenu(effortBtn, (box) => {
+    for (const choice of [undefined, ...options]) {
+      const item = el("button", `item${choice === effort ? " on" : ""}`);
+      item.type = "button";
+      item.append(el("span", undefined, choice ?? "Model default"));
+      item.addEventListener("click", () => {
+        closeMenu();
+        post({ type: "setEffort", effort: choice });
+      });
+      box.append(item);
+    }
+  });
+}
+effortBtn.addEventListener("click", effortMenu);
+
+function webMenu(): void {
+  const rows: Array<["mode" | "allow" | "deny", string, string]> = [
+    ["mode", "Follow the mode", "Plan and Bypass let web search and page fetch through; Review and Accept edits ask first"],
+    ["allow", "Always allow", "Search and fetch without asking (asks you to confirm)"],
+    ["deny", "Turn off", "The agent gets no web search and no page fetch in this chat"],
+  ];
+  openMenu(webBtn, (box) => {
+    for (const [policy, label, hint] of rows) {
+      const item = el("button", `item${policy === web ? " on" : ""}`);
+      item.type = "button";
+      item.append(el("span", undefined, label), el("small", undefined, hint));
+      item.addEventListener("click", () => {
+        closeMenu();
+        post({ type: "setWeb", policy });
+      });
+      box.append(item);
+    }
+  });
+}
+webBtn.addEventListener("click", webMenu);
+
 /** Reads a File from the page as base64 (no `data:` prefix) and hands it to the extension, which decides if it may be attached. */
 function sendFile(file: File, fallbackName: string): void {
   if (file.size > 6 * 1024 * 1024) {
@@ -778,7 +899,7 @@ modeBtn.addEventListener("click", modeMenu);
 modelBtn.addEventListener("click", modelMenu);
 document.addEventListener("click", (e) => {
   const target = e.target as HTMLElement;
-  if (!menu.hidden && !menu.contains(target) && target !== modeBtn && target !== modelBtn) closeMenu();
+  if (!menu.hidden && !menu.contains(target) && !menuAnchor?.contains(target)) closeMenu();
   const link = target.closest<HTMLElement>("a[data-href]");
   if (link?.dataset.href) post({ type: "openLink", url: link.dataset.href });
   const copy = target.closest<HTMLElement>("button.copy");
@@ -810,7 +931,8 @@ window.addEventListener("message", (e: MessageEvent<ToWebview>) => {
     case "user":
       $<HTMLElement>("welcome")?.remove();
       timeline.append(userBubble(message.text, message.files));
-      timeline.scrollTop = timeline.scrollHeight;
+      following = true;
+      scrollToEnd();
       break;
     case "fileChange":
       showFileChange(message.change);
@@ -831,6 +953,7 @@ window.addEventListener("message", (e: MessageEvent<ToWebview>) => {
       break;
     case "model":
       model = message.ref;
+      effort = undefined;
       paintChips();
       break;
     case "notice":
@@ -848,6 +971,19 @@ window.addEventListener("message", (e: MessageEvent<ToWebview>) => {
     case "voiceError":
       onVoiceError(message);
       break;
+    case "effort":
+      effort = message.effort;
+      paintChips();
+      break;
+    case "web":
+      web = message.policy;
+      paintChips();
+      break;
+    case "models":
+      models = message.models;
+      if (message.model !== undefined) model = message.model;
+      paintChips();
+      break;
     case "sessions":
       paintSessions(message.rows);
       break;
@@ -858,6 +994,9 @@ window.addEventListener("message", (e: MessageEvent<ToWebview>) => {
       modelBtn.title = message.text !== "" ? `Model. ${message.text}` : "Model";
       break;
     case "reset":
+      effort = undefined;
+      web = "mode";
+      paintChips();
       timeline.replaceChildren();
       blocks.clear();
       tools.clear();

@@ -11,6 +11,11 @@ const listeners = new Set();
 const pending = new Map();
 let session;
 let selected;
+let catalogFails = false;
+let catalog = [
+  { id: "m1", modelID: "m1", providerID: "opencode", name: "Zen One Free", variants: [{ id: "low" }, { id: "high" }], settings: { apiKey: "SECRET-KEY", baseURL: "https://secret.example" } },
+  { id: "m2", modelID: "m2", providerID: "opencode-go", name: "Go Two" },
+];
 
 const emit = (type, data) => {
   const frame = JSON.stringify({ id: "evt_" + Math.random().toString(36).slice(2), created: Date.now(), type, data });
@@ -79,11 +84,18 @@ const server = createServer(async (req, res) => {
     return json(res, 200, { location: { directory: "x" }, data });
   }
   if (req.method === "GET" && path === "/api/calls") return json(res, 200, calls);
-  if (req.method === "GET" && path === "/api/model")
-    return json(res, 200, { data: [
-      { id: "m1", modelID: "m1", providerID: "opencode", name: "Zen One Free", settings: { apiKey: "SECRET-KEY", baseURL: "https://secret.example" } },
-      { id: "m2", modelID: "m2", providerID: "opencode-go", name: "Go Two" },
-    ] });
+  // Tests change the catalog and make the server announce it: POST /api/test {models?: [...], fail?: bool, emit?: "model.updated"}.
+  if (req.method === "POST" && path === "/api/test") {
+    const b = await readBody(req);
+    if (b.models) catalog = b.models;
+    if (b.fail !== undefined) catalogFails = b.fail;
+    if (b.emit) emit(b.emit, {});
+    return json(res, 200, true);
+  }
+  if (req.method === "GET" && path === "/api/model") {
+    if (catalogFails) return json(res, 500, { message: "catalog unavailable" });
+    return json(res, 200, { data: catalog });
+  }
   if (req.method === "GET" && path === "/api/model/default") return json(res, 200, { data: { id: "m2", modelID: "m2", providerID: "opencode-go", settings: { apiKey: "SECRET-KEY" } } });
   if (req.method === "GET" && path === "/api/permission/request") return json(res, 200, { data: [...pending.values()].map(({ resolve, reply, ...row }) => row) });
   if (req.method === "GET" && path === "/api/event") {

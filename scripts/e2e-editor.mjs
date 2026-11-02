@@ -14,7 +14,13 @@ import { join, resolve } from "node:path";
 
 const exe = process.argv[2];
 const label = process.argv[3] ?? "editor";
+// The free models have a usage cap of their own (a real one was hit while testing: HTTP 429, `provider.free-limit`, per model), so the model is a parameter.
 const modelRef = process.argv[4] ?? "opencode/glm-5.3-flash-free";
+const modelTail = modelRef.split("/")[1] ?? "";
+const modelTag = modelTail.split("-")[0] ?? "";
+// The model of the attachment step must accept images: the free vision model by default (E2E_VISION overrides).
+const visionRef = process.env.E2E_VISION ?? "opencode/nemotron-3.5-super-vl-free";
+const visionTail = visionRef.split("/")[1] ?? "";
 if (!exe) {
   console.error("usage: node scripts/e2e-editor.mjs <editor-exe> [label] [providerID/modelID]");
   process.exit(2);
@@ -34,6 +40,7 @@ writeFileSync(
   JSON.stringify({ "workbench.startupEditor": "none", "security.workspace.trust.enabled": false, "telemetry.telemetryLevel": "off", "update.mode": "none", "extensions.autoCheckUpdates": false, "workbench.tips.enabled": false, "window.restoreWindows": "none", "workbench.colorTheme": "Default Dark Modern", "chat.disableAIFeatures": true, "window.dialogStyle": "custom", "workbench.secondarySideBar.defaultVisibility": "hidden" }, null, 2),
 );
 writeFileSync(join(workspace, "hello.txt"), "hello from the capella e2e\n");
+writeFileSync(join(workspace, "index.html"), "<!doctype html><title>Capella static preview</title><h1>Static page OK</h1>");
 writeFileSync(join(workspace, "plan.txt"), "alpha\nbeta\ngamma\n");
 // Dictation without a microphone or an engine: the fake recorder and transcriber (setting capella.dev.voice).
 mkdirSync(join(workspace, ".vscode"), { recursive: true });
@@ -46,7 +53,8 @@ if (V1) {
   const userSettings = join(userData, "User", "settings.json");
   writeFileSync(userSettings, JSON.stringify({ ...JSON.parse(readFileSync(userSettings, "utf8")), "capella.opencodePath": V1 }, null, 2));
 }
-const childEnv = { ...process.env };
+const traceFile = join(work, "trace.log");
+const childEnv = { ...process.env, CAPELLA_TRACE_FILE: traceFile };
 if (V1) {
   const v1Home = join(work, "v1-home");
   Object.assign(childEnv, { HOME: v1Home, USERPROFILE: v1Home, XDG_CONFIG_HOME: join(v1Home, "c"), XDG_DATA_HOME: join(v1Home, "d"), XDG_STATE_HOME: join(v1Home, "s"), XDG_CACHE_HOME: join(v1Home, "k") });
@@ -207,11 +215,85 @@ try {
   await shot("03-panel-open");
 
   // The page asks the extension to start opencode; the version chip fills in when the real server answered.
+  // Following the output (a function so that E2E_UI_ONLY can run it without any model turn).
+  async function scrollChecks() {
+    // Following the output: it keeps following while text streams and blocks repaint, stops only on a real scroll up, and
+    // the jump button brings it back.
+    await evalWeb(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const send = (event) => w.postMessage({ type: 'event', event }, '*');
+      send({ type: 'turn-started', sessionId: 's' });
+      for (let i = 0; i < 120; i++) {
+        send({ type: 'text', sessionId: 's', messageId: 'scroll-msg', ordinal: 0, delta: 'word' + i + ' with **bold** and a long tail of words to make the block grow ' + (i % 9 === 0 ? '\\n\\n' : '') });
+        if (i % 20 === 0) { send({ type: 'tool-started', sessionId: 's', messageId: 'scroll-msg', callId: 'sc' + i, name: 'bash' }); send({ type: 'tool-result', sessionId: 's', messageId: 'scroll-msg', callId: 'sc' + i, text: 'line\\nline\\nline' }); }
+        await sleep(6);
+      }
+      return true; })()`);
+    await sleep(600);
+    const followed = await evalWeb("(() => { const m = d.getElementById('timeline'); return { gap: m.scrollHeight - m.scrollTop - m.clientHeight, jump: !d.getElementById('jumpBottom').hidden }; })()");
+    check("while a long answer streams and blocks repaint, the view stays at the end and shows no jump button", followed.gap < 6 && !followed.jump, JSON.stringify(followed));
+    await evalWeb("(() => { const m = d.getElementById('timeline'); m.scrollTop = Math.max(0, m.scrollTop - 600); m.dispatchEvent(new w.WheelEvent('wheel', { deltaY: -120, bubbles: true })); return true; })()");
+    await evalWeb(`(async () => { for (let i = 0; i < 20; i++) { w.postMessage({ type: 'event', event: { type: 'text', sessionId: 's', messageId: 'scroll-msg', ordinal: 0, delta: ' more more more more more more more more more more more more ' } }, '*'); await new Promise((r) => setTimeout(r, 10)); } return true; })()`);
+    await sleep(400);
+    const left = await evalWeb("(() => { const m = d.getElementById('timeline'); return { gap: m.scrollHeight - m.scrollTop - m.clientHeight, jump: !d.getElementById('jumpBottom').hidden, following: m.dataset.following }; })()");
+    check("after the user scrolls up the view stays where they put it and a jump button appears", left.gap > 100 && left.jump, JSON.stringify(left));
+    await shot("26-scrolled-up");
+    await evalWeb("(() => { d.getElementById('jumpBottom').click(); return true; })()");
+    await sleep(300);
+    const back = await evalWeb("(() => { const m = d.getElementById('timeline'); return { gap: m.scrollHeight - m.scrollTop - m.clientHeight, jump: !d.getElementById('jumpBottom').hidden }; })()");
+    check("the jump button returns to the end and following resumes", back.gap < 6 && !back.jump, JSON.stringify(back));
+    await evalWeb("(() => { w.postMessage({ type: 'event', event: { type: 'turn-ended', sessionId: 's', outcome: 'succeeded' } }, '*'); return true; })()");
+    const copyBtn = await waitFor("the Copy answer button", () => evalWeb("(() => { const t = [...d.querySelectorAll('.turn')].pop(); return t.querySelector('.copy-answer') ? t.querySelector('.copy-answer').textContent : null; })()"), 5000).catch(() => null);
+    check("a finished turn has one Copy answer button", copyBtn === "Copy answer", String(copyBtn));
+
+
+  }
+
+  // The new controls, with no model turn: the effort of the model, web access, and the model list read again.
+  async function controlChecks() {
+    const effortInfo = await evalWeb("(() => { const b = d.getElementById('effortBtn'); return { hidden: b.hidden, text: b.textContent }; })()");
+    check("the effort chip shows for a model that has variants", !effortInfo.hidden && /Effort: default/.test(effortInfo.text), JSON.stringify(effortInfo));
+    await evalWeb("(() => { d.getElementById('effortBtn').click(); return true; })()");
+    await waitFor("the effort menu", () => evalWeb("!d.getElementById('menu').hidden"), 5000);
+    const options = await evalWeb("[...d.querySelectorAll('#menu .item')].map(x => x.textContent)");
+    check("the effort menu offers the model's own options and the default", options[0] === "Model default" && options.length >= 3, JSON.stringify(options));
+    await evalWeb("(() => { [...d.querySelectorAll('#menu .item')].find(x => x.textContent === 'high').click(); return true; })()");
+    const picked = await waitFor("Effort: high", () => evalWeb("d.getElementById('effortBtn').textContent === 'Effort: high' ? true : null"), 8000).catch(() => null);
+    check("choosing an effort shows it on the chip", !!picked);
+    await shot("27-effort");
+
+    await evalWeb("(() => { d.getElementById('webBtn').click(); return true; })()");
+    await waitFor("the web menu", () => evalWeb("!d.getElementById('menu').hidden"), 5000);
+    await evalWeb("(() => { [...d.querySelectorAll('#menu .item')].find(x => /Turn off/.test(x.textContent)).click(); return true; })()");
+    const off = await waitFor("Web: off", () => evalWeb("d.getElementById('webBtn').textContent === 'Web: off' ? true : null"), 8000).catch(() => null);
+    check("turning web access off shows it on the chip", !!off);
+
+    await evalWeb("(() => { d.getElementById('modelBtn').click(); return true; })()");
+    await waitFor("the model menu", () => evalWeb("!d.getElementById('menu').hidden"), 5000);
+    const hasRefresh = await evalWeb("[...d.querySelectorAll('#menu .item')].some(x => /Read the model list again/.test(x.textContent))");
+    check("the model menu has a button to read the list again", hasRefresh);
+    await evalWeb("(() => { [...d.querySelectorAll('#menu .item')].find(x => /Read the model list again/.test(x.textContent)).click(); return true; })()");
+    const again = await waitFor("the refresh notice", () => evalWeb("/Model list read again/.test(d.getElementById('notice').textContent) ? d.getElementById('notice').textContent : null"), 15000).catch(() => null);
+    check("reading the list again says how many models it found", !!again, String(again));
+    await evalWeb("(() => { d.getElementById('plusBtn').click(); return true; })()");
+    const plus = await waitFor("the + menu", () => evalWeb("(() => { const m = d.getElementById('menu'); return m.hidden ? null : [...m.querySelectorAll('.item span')].map(x => x.textContent); })()"), 5000).catch(() => null);
+    check("the + menu opens and stays open, with the attach choices", !!plus && plus.length === 3 && /current file/.test(plus.join(" ")), JSON.stringify(plus));
+    await evalWeb("(() => { d.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return true; })()");
+    await shot("28-controls");
+  }
+
   const chips = await waitFor("opencode to start and the page to be initialised", () => evalWeb("(() => { const v = d.getElementById('version').textContent; const m = d.getElementById('modeBtn').textContent; return v && m ? { version: v, mode: m, model: d.getElementById('modelBtn').textContent, notice: d.getElementById('notice').textContent } : null; })()"), 60000);
   console.log("chips:", JSON.stringify(chips));
   check("the real opencode started and Capella shows its version", /^opencode \d/.test(chips.version), chips.version);
   check("the chat starts in Plan mode", chips.mode === "Plan", chips.mode);
   check("styles and the brand mark loaded through the webview", await evalWeb("getComputedStyle(d.body).backgroundColor !== 'rgba(0, 0, 0, 0)' && d.querySelector('.welcome img').naturalWidth > 0"));
+  if (process.env.E2E_UI_ONLY) {
+    // Only the checks that need no model turn (the free models have a cap of their own).
+    await scrollChecks();
+    await controlChecks();
+    console.log(failed === 0 ? `[${label}] ALL CHECKS PASSED (UI only)` : `[${label}] ${failed} CHECK(S) FAILED (UI only)`);
+    throw Object.assign(new Error("ui-only run finished"), { v1Done: true });
+  }
   if (V1) {
     // opencode 1.x: it has no usage endpoint, so there is no meter. Pick the free model, send one message, read the answer.
     check("the chat shows opencode 1.x", /^opencode 1./.test(chips.version), chips.version);
@@ -225,7 +307,7 @@ try {
     check("the free Zen model is in the 1.x catalog and can be picked", picked1);
     await evalWeb("(() => { const i = d.getElementById('input'); i.value = 'Read hello.txt and tell me what it says, in one short sentence.'; i.dispatchEvent(new Event('input')); d.getElementById('send').click(); return true; })()");
     await waitFor("the 1.x turn to end", () => evalWeb("(() => { const t = [...d.querySelectorAll('.turn')].pop(); return t && !d.querySelector('.turn.live') && !d.getElementById('stop').offsetParent && t.querySelector('.md') ? true : false; })()"), 150000);
-    const answer = await evalWeb("[...d.querySelectorAll('.turn')].pop().querySelector('.md').textContent");
+    const answer = await evalWeb("[...[...d.querySelectorAll('.turn')].pop().querySelectorAll('.md')].map(x => x.textContent).join(' ')");
     const toolNames = await evalWeb("[...d.querySelectorAll('.turn .tool .name')].map(x => x.textContent)");
     console.log("1.x answer:", JSON.stringify(answer), "| tools:", JSON.stringify(toolNames));
     check("the 1.x turn streamed an answer that mentions the file's content", /capella/i.test(answer), answer);
@@ -251,14 +333,14 @@ try {
   const menuInfo = await waitFor("the model menu", () => evalWeb("(() => { const m = d.getElementById('menu'); return m.hidden ? null : { groups: [...m.querySelectorAll('.group')].map(g => g.textContent), items: m.querySelectorAll('.item').length }; })()"), 10000);
   console.log("model menu:", JSON.stringify(menuInfo));
   check("the model menu groups Zen and Go models", menuInfo.groups.includes("OpenCode Zen") && menuInfo.groups.includes("OpenCode Go"), JSON.stringify(menuInfo.groups));
-  await evalWeb("(() => { const s = d.querySelector('#menu input'); s.value = 'glm-5.3'; s.dispatchEvent(new Event('input')); return true; })()");
+  await evalWeb(`(() => { const s = d.querySelector('#menu input'); s.value = ${JSON.stringify(modelTail.replace(/-free$/, ""))}; s.dispatchEvent(new Event('input')); return true; })()`);
   await sleep(400);
   await shot("05-model-menu");
   const picked = await evalWeb(`(() => { const it = [...d.querySelectorAll('#menu .item')].find(x => x.querySelector('small').textContent === ${JSON.stringify(modelRef)}); if (!it) return false; it.click(); return true; })()`);
   check(`the free model ${modelRef} is in the catalog and can be picked`, picked);
-  await waitFor("the model chip to change", () => evalWeb("/GLM/i.test(d.getElementById('modelBtn').textContent)"), 15000).catch(() => undefined);
+  await waitFor("the model chip to change", () => evalWeb(`new RegExp(${JSON.stringify(modelTag)}, 'i').test(d.getElementById('modelBtn').textContent)`), 15000).catch(() => undefined);
   const modelChip = await evalWeb("d.getElementById('modelBtn').textContent");
-  check("the model chip shows the picked model", /GLM/i.test(modelChip), modelChip);
+  check("the model chip shows the picked model", new RegExp(modelTag, "i").test(modelChip), modelChip);
 
   // Mode menu: switch to "Review each change" so the shell command has to ask.
   await evalWeb("(() => { d.getElementById('modeBtn').click(); return true; })()");
@@ -285,7 +367,7 @@ try {
   // A second turn that needs no permission: reads a file in the folder (Review mode allows reads).
   await evalWeb("(() => { const i = d.getElementById('input'); i.value = 'Read hello.txt and tell me what it says, in one short sentence.'; i.dispatchEvent(new Event('input')); d.getElementById('send').click(); return true; })()");
   await waitFor("the second turn to end", () => evalWeb("(() => d.querySelectorAll('.turn').length >= 2 && !d.querySelector('.turn.live') && !d.getElementById('stop').offsetParent)()"), 120000);
-  const second = await evalWeb("(() => { const t = [...d.querySelectorAll('.turn')].pop(); return { tools: [...t.querySelectorAll('.tool .name')].map(x => x.textContent), text: t.querySelector('.md')?.textContent ?? '', foot: t.querySelector('.foot')?.textContent ?? '' }; })()");
+  const second = await evalWeb("(() => { const t = [...d.querySelectorAll('.turn')].pop(); return { tools: [...t.querySelectorAll('.tool .name')].map(x => x.textContent), text: [...t.querySelectorAll('.md')].map(x => x.textContent).join(' '), foot: t.querySelector('.foot')?.textContent ?? '' }; })()");
   console.log("second turn:", JSON.stringify(second));
   check("the second turn streamed an answer that mentions the file's content", /capella/i.test(second.text), second.text.slice(0, 120));
   check("tokens were counted", /in ·/.test(second.foot), second.foot);
@@ -297,7 +379,7 @@ try {
   // Free-model count: the model is a free one, so the picker's tooltip carries Capella's own count (never a provider quota).
   const note = await evalWeb("d.getElementById('modelBtn').title");
   console.log("model tooltip:", note);
-  check("the free model's tooltip shows Capella's own request count, labelled as such", /Capella has counted \d+ request/.test(note) && /not the provider's/.test(note), note);
+  if (modelRef.endsWith("-free")) check("the free model's tooltip shows Capella's own request count, labelled as such", /Capella has counted \d+ request/.test(note) && /not the provider's/.test(note), note);
 
   // Web cards and the preview button, from synthetic events (a real page is served by this script, nothing is approved).
   const http = await import("node:http");
@@ -329,6 +411,20 @@ try {
   await sleep(1500);
   await shot("13-preview-open");
   pageServer.close();
+
+  // Preview of a static HTML file: the Preview button -> quick pick -> the file -> the confirmation -> the editor's browser.
+  await evalWeb("(() => { d.getElementById('previewBtn').click(); return true; })()");
+  await waitFor("the preview menu", () => evalPage("[...document.querySelectorAll('.quick-input-widget .monaco-list-row')].some(r => /Preview an HTML file/.test(r.textContent))"), 15000);
+  await shot("24-preview-menu");
+  await evalPage("(() => { [...document.querySelectorAll('.quick-input-widget .monaco-list-row')].find(r => /Preview an HTML file/.test(r.textContent)).click(); return true; })()");
+  await waitFor("the file list", () => evalPage("[...document.querySelectorAll('.quick-input-widget .monaco-list-row')].some(r => /index\.html/.test(r.textContent))"), 15000);
+  await evalPage("(() => { [...document.querySelectorAll('.quick-input-widget .monaco-list-row')].find(r => /index\.html/.test(r.textContent)).click(); return true; })()");
+  await waitFor("the confirmation", () => evalPage("[...document.querySelectorAll('.monaco-dialog-box .monaco-button')].some(b => /Serve and preview/.test(b.textContent))"), 15000);
+  await evalPage("(() => { [...document.querySelectorAll('.monaco-dialog-box .monaco-button')].find(b => /Serve and preview/.test(b.textContent)).click(); return true; })()");
+  const staticTab = await waitFor("the static page in the editor's browser", () => evalPage("(() => { const tab = [...document.querySelectorAll('.tab')].find(x => /Capella static preview|Jetski Preview/.test(x.textContent)); return tab ? tab.textContent.trim() : null; })()"), 20000).catch(() => null);
+  check("an HTML file of the folder is served read-only and opens in the editor's browser", !!staticTab, JSON.stringify(staticTab));
+  await sleep(1500);
+  await shot("25-static-preview");
 
   // A usage-cap failure is explained in words, not as a generic error.
   await evalWeb("(() => { const send = (event) => w.postMessage({ type: 'event', event }, '*'); send({ type: 'turn-started', sessionId: 's' }); send({ type: 'turn-ended', sessionId: 's', outcome: 'failed', error: { type: 'provider.rate_limit', message: 'x', status: 429, rateLimited: true } }); return true; })()");
@@ -382,19 +478,25 @@ try {
   check("the before side has 'beta' and the after side 'BETA'", sides.original.some((l) => /beta/.test(l)) && !sides.original.some((l) => /BETA/.test(l)) && sides.modified.some((l) => /BETA/.test(l)), JSON.stringify(sides));
   await shot("22-editor-diff");
 
+
+  await scrollChecks();
+
   // Attachments: a pasted image, a dropped file from the open folder, a refused one from outside it, and a real turn with a
   // free vision model that has to see the image.
   const { pathToFileURL } = await import("node:url");
   const RED_PNG = "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAIAAADYYG7QAAAAQklEQVR4nO3OQQ0AIAwAsYmYf2WIwQXHo0kFdM7uVyYfCAkJCdUDISEhoXogJCQkVA+EhISE6oGQkJBQPRASEnrsAsvRJIjy9ALLAAAAAElFTkSuQmCC";
   writeFileSync(join(work, "outside.txt"), "not in the open folder\n");
-  await evalWeb("(() => { d.getElementById('modelBtn').click(); return true; })()");
-  await waitFor("the model menu", () => evalWeb("!d.getElementById('menu').hidden"), 5000);
-  await evalWeb("(() => { const s = d.querySelector('#menu input'); s.value = 'nemotron-3.5-super-vl'; s.dispatchEvent(new Event('input')); return true; })()");
-  await sleep(400);
-  const visionPicked = await evalWeb("(() => { const it = [...d.querySelectorAll('#menu .item')].find(x => x.querySelector('small').textContent === 'opencode/nemotron-3.5-super-vl-free'); if (!it) return false; it.click(); return true; })()");
-  check("the free vision model is in the catalog and can be picked", visionPicked);
-  await waitFor("the model chip to change", () => evalWeb("/Nemotron/i.test(d.getElementById('modelBtn').textContent)"), 15000).catch(() => undefined);
+  const withVision = !process.env.E2E_SKIP_VISION; // the vision step needs a model that takes images, and the free ones have a cap
+  if (withVision) {
+    await evalWeb("(() => { d.getElementById('modelBtn').click(); return true; })()");
+    await waitFor("the model menu", () => evalWeb("!d.getElementById('menu').hidden"), 5000);
+    await evalWeb(`(() => { const s = d.querySelector('#menu input'); s.value = ${JSON.stringify(visionTail.replace(/-free$/, ""))}; s.dispatchEvent(new Event('input')); return true; })()`);
+    await sleep(400);
+    const visionPicked = await evalWeb(`(() => { const it = [...d.querySelectorAll('#menu .item')].find(x => x.querySelector('small').textContent === ${JSON.stringify(visionRef)}); if (!it) return false; it.click(); return true; })()`);
+    check("the free vision model is in the catalog and can be picked", visionPicked);
+    await waitFor("the model chip to change", () => evalWeb("/Nemotron/i.test(d.getElementById('modelBtn').textContent)"), 15000).catch(() => undefined);
 
+  }
   await evalWeb(`(() => { const bytes = Uint8Array.from(atob(${JSON.stringify(RED_PNG)}), (c) => c.charCodeAt(0)); const dt = new w.DataTransfer(); dt.items.add(new w.File([bytes], 'red.png', { type: 'image/png' })); d.getElementById('input').dispatchEvent(new w.ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })); return true; })()`);
   const pasted = await waitFor("the pasted image chip", () => evalWeb("(() => { const c = [...d.querySelectorAll('#chips .chip-file')]; return c.length === 1 ? { name: c[0].querySelector('.fname').textContent, thumb: !!c[0].querySelector('img') } : null; })()"), 15000).catch(() => null);
   check("a pasted image becomes a chip with a thumbnail", !!pasted && pasted.name === "red.png" && pasted.thumb, JSON.stringify(pasted));
@@ -413,15 +515,17 @@ try {
   check("a chip can be removed and the file attached again", true);
   await shot("18-attachments");
 
-  await evalWeb("(() => { const i = d.getElementById('input'); i.value = 'What colour is the attached image (one word), and what does hello.txt say (one short sentence)?'; i.dispatchEvent(new Event('input')); d.getElementById('send').click(); return true; })()");
-  const sent = await waitFor("the message with attachments", () => evalWeb("(() => { const y = [...d.querySelectorAll('.you')].pop(); return y && y.querySelector('.sent-file img') ? [...y.querySelectorAll('.sent-file')].map(x => x.textContent) : null; })()"), 20000).catch(() => null);
-  check("the sent message shows what went with it, including the image thumbnail", !!sent && sent.length === 2, JSON.stringify(sent));
-  check("sending clears the chips", (await evalWeb("d.querySelectorAll('#chips .chip-file').length")) === 0);
-  await waitFor("the vision turn to end", () => evalWeb("(() => { const t = [...d.querySelectorAll('.turn')].pop(); return !d.querySelector('.turn.live') && !d.getElementById('stop').offsetParent && t && t.querySelector('.md') ? true : false; })()"), 150000);
-  const seen = await evalWeb("[...d.querySelectorAll('.turn')].pop().querySelector('.md').textContent");
-  console.log("vision answer:", JSON.stringify(seen));
-  check("the model saw the attached image (it names the colour red)", /red/i.test(seen), seen);
-  await shot("19-attachments-answer");
+  if (withVision) {
+    await evalWeb("(() => { const i = d.getElementById('input'); i.value = 'What colour is the attached image (one word), and what does hello.txt say (one short sentence)?'; i.dispatchEvent(new Event('input')); d.getElementById('send').click(); return true; })()");
+    const sent = await waitFor("the message with attachments", () => evalWeb("(() => { const y = [...d.querySelectorAll('.you')].pop(); return y && y.querySelector('.sent-file img') ? [...y.querySelectorAll('.sent-file')].map(x => x.textContent) : null; })()"), 20000).catch(() => null);
+    check("the sent message shows what went with it, including the image thumbnail", !!sent && sent.length === 2, JSON.stringify(sent));
+    check("sending clears the chips", (await evalWeb("d.querySelectorAll('#chips .chip-file').length")) === 0);
+    await waitFor("the vision turn to end", () => evalWeb("(() => { const t = [...d.querySelectorAll('.turn')].pop(); return !d.querySelector('.turn.live') && !d.getElementById('stop').offsetParent && t && t.querySelector('.md') ? true : false; })()"), 150000);
+    const seen = await evalWeb("[...[...d.querySelectorAll('.turn')].pop().querySelectorAll('.md')].map(x => x.textContent).join(' ')");
+    console.log("vision answer:", JSON.stringify(seen));
+    check("the model saw the attached image (it names the colour red)", /red/i.test(seen), seen);
+    await shot("19-attachments-answer");
+  }
 
   // Voice dictation with the fake recorder and transcriber: the button records, stops, and the text lands in the box
   // (never sent by itself); Esc cancels.
@@ -463,6 +567,14 @@ try {
     console.error(`[${label}] ERROR:`, error instanceof Error ? error.message : String(error));
   }
 } finally {
+  if (failed > 0) {
+    try {
+      console.log("--- change tracking trace ---");
+      console.log(readFileSync(traceFile, "utf8"));
+    } catch {
+      // no trace written
+    }
+  }
   browser?.close();
   child.kill();
   // The Electron main process hands off to children; wait a moment, then clean the throwaway profile.

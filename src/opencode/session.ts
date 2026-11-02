@@ -6,7 +6,7 @@ import { EventStream, OpencodeClient } from "./client.ts";
 import { assess, type Compatibility, type Tested } from "./compat.ts";
 import type { ChatEvent, ModelInfo } from "./events.ts";
 import type { ReplayItem, SessionRow } from "./history.ts";
-import { DEFAULT_MODE, modeById, type ModeId } from "./modes.ts";
+import { DEFAULT_MODE, modeById, type ModeId, type WebPolicy } from "./modes.ts";
 import { OpencodeServer, type OpencodeServerOptions } from "./server.ts";
 import testedV1 from "./tested.v1.json" with { type: "json" };
 import testedV2 from "./tested.json" with { type: "json" };
@@ -22,7 +22,15 @@ export interface OpencodeSessionOptions extends OpencodeServerOptions {
 }
 
 /** Everything the UI is told besides turn content. */
-export type SessionEvent = ChatEvent | { type: "resync"; sessionId: string } | { type: "server-exit"; code: number | null };
+export type SessionEvent =
+  | ChatEvent
+  | { type: "resync"; sessionId: string }
+  | { type: "server-exit"; code: number | null }
+  /** The model list was read again: what appeared, what went, and whether the last read failed (the old list is kept). */
+  | { type: "catalog"; added: string[]; removed: string[]; stale?: string };
+
+/** Frames that say the model list may have changed (provider, account or catalog updates), on 2.x and on 1.x. */
+const CATALOG_FRAME = /"type"\s*:\s*"(?:model|provider|integration|catalog)\.updated"/;
 
 /** The generation of opencode that answered: 2.x answers `/api/info`, 1.x answers `/global/health`. */
 async function detectBackend(client: OpencodeClient): Promise<Backend> {
@@ -57,8 +65,12 @@ export class OpencodeSession extends EventEmitter {
   private starting?: Promise<void>;
   private catalog: ModelInfo[] = [];
   private model?: ModelRef;
+  /** One of the current model's own variants; undefined means its default. Cleared when the model changes. */
+  private effortValue?: string;
   private mode: ModeId;
+  private webPolicy: WebPolicy = "mode";
   private readonly announced = new Set<string>();
+  private catalogTimer?: NodeJS.Timeout;
 
   version?: string;
   /** `v2` for opencode 2.x, `v1` for 1.x; undefined until the server answered. */
@@ -88,6 +100,14 @@ export class OpencodeSession extends EventEmitter {
 
   get currentModel(): ModelRef | undefined {
     return this.model;
+  }
+
+  get web(): WebPolicy {
+    return this.webPolicy;
+  }
+
+  get effort(): string | undefined {
+    return this.effortValue;
   }
 
   get id(): string | undefined {
@@ -124,7 +144,37 @@ export class OpencodeSession extends EventEmitter {
     return this.backend;
   }
 
+  /**
+   * Reads the model list again. A failed read keeps the last good list and says so (the list may be out of date); an
+   * empty list after a good one counts as a failure, not as "no models". Changes are reported as ids.
+   */
+  async refreshModels(): Promise<void> {
+    const backend = this.requireBackend();
+    let fresh: ModelInfo[];
+    try {
+      fresh = await backend.models();
+      if (fresh.length === 0 && this.catalog.length > 0) throw new Error("opencode returned an empty model list");
+    } catch (error) {
+      this.emit("event", { type: "catalog", added: [], removed: [], stale: error instanceof Error ? error.message : String(error) } satisfies SessionEvent);
+      return;
+    }
+    const key = (m: ModelInfo) => `${m.providerId}/${m.modelId}`;
+    const before = new Set(this.catalog.map(key));
+    const after = new Set(fresh.map(key));
+    const added = [...after].filter((k) => !before.has(k));
+    const removed = [...before].filter((k) => !after.has(k));
+    this.catalog = fresh;
+    this.emit("event", { type: "catalog", added, removed } satisfies SessionEvent);
+  }
+
+  private scheduleCatalogRefresh(): void {
+    clearTimeout(this.catalogTimer);
+    // Several updates arrive together when an account or catalog changes: one read after they settle.
+    this.catalogTimer = setTimeout(() => void this.refreshModels(), 1500);
+  }
+
   private onMessage(raw: string): void {
+    if (CATALOG_FRAME.test(raw)) this.scheduleCatalogRefresh();
     if (!this.sessionId || !this.backend) return;
     for (const result of this.backend.mapEvent(raw, this.sessionId)) {
       if (result.kind === "unknown") {
@@ -172,7 +222,7 @@ export class OpencodeSession extends EventEmitter {
     if (this.sessionId) return this.sessionId;
     const backend = this.requireBackend();
     const model = await this.resolveModel();
-    const id = await backend.createSession(this.mode, model);
+    const id = await backend.createSession(this.mode, model, this.effortValue, this.webPolicy);
     this.sessionId = id;
     backend.resetEvents();
     this.model = model;
@@ -181,8 +231,20 @@ export class OpencodeSession extends EventEmitter {
 
   async setModel(ref: string): Promise<void> {
     const model = parseModelRef(ref);
+    // A variant belongs to one model: a new model starts at its default.
     if (this.sessionId) await this.requireBackend().selectModel(this.sessionId, model);
     this.model = model;
+    this.effortValue = undefined;
+  }
+
+  /** Picks one of the current model's variants (its reasoning effort); undefined returns to the model's default. */
+  async setEffort(effort: string | undefined): Promise<void> {
+    await this.start();
+    const model = await this.resolveModel();
+    const allowed = this.catalog.find((m) => m.providerId === model.providerId && m.modelId === model.modelId)?.variants ?? [];
+    if (effort !== undefined && !allowed.includes(effort)) throw new Error(`${effort} is not one of this model's options`);
+    if (this.sessionId) await this.requireBackend().selectModel(this.sessionId, model, effort);
+    this.effortValue = effort;
   }
 
   /** Sends one user message. Returns when the host has accepted it; the turn then streams as events. */
@@ -205,8 +267,14 @@ export class OpencodeSession extends EventEmitter {
   /** Changes the mode of a live session: the mode's rules replace the session's, and so does the agent. Not during a turn. */
   async setMode(id: ModeId): Promise<void> {
     const mode = modeById(id);
-    if (this.sessionId) await this.requireBackend().applyMode(this.sessionId, mode.id);
+    if (this.sessionId) await this.requireBackend().applyMode(this.sessionId, mode.id, this.webPolicy);
     this.mode = mode.id;
+  }
+
+  /** Web access of this chat, laid over the mode's rules. Not during a turn; the caller checks. */
+  async setWeb(policy: WebPolicy): Promise<void> {
+    if (this.sessionId) await this.requireBackend().applyMode(this.sessionId, this.mode, policy);
+    this.webPolicy = policy;
   }
 
   /** OpenCode Go allowance and Console budgets. Undefined when not signed in or when this opencode has none (1.x has none). */
@@ -239,15 +307,19 @@ export class OpencodeSession extends EventEmitter {
     this.sessionId = id;
     this.announced.clear();
     backend.resetEvents();
-    if (stored) this.model = stored;
-    await backend.applyMode(id, this.mode);
-    if (this.model) await backend.selectModel(id, this.model);
+    if (stored) {
+      this.model = stored;
+      this.effortValue = undefined;
+    }
+    await backend.applyMode(id, this.mode, this.webPolicy);
+    if (this.model) await backend.selectModel(id, this.model, this.effortValue);
     const items = await backend.messages(id);
     await this.surfacePendingApprovals();
     return items;
   }
 
   async dispose(): Promise<void> {
+    clearTimeout(this.catalogTimer);
     this.stream?.stop();
     await this.server.stop();
   }

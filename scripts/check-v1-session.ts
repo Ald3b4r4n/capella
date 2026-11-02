@@ -2,7 +2,8 @@
 // that is REJECTED, a mode switch, stored chats (list, resume, fork). Throwaway home with your credentials stripped:
 // opencode's free models answer with a public key, so none of your accounts is used or billed.
 // Usage: node scripts/check-v1-session.ts <opencode-1.x executable> [providerID/modelID]
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OpencodeSession, type SessionEvent } from "../src/opencode/session.ts";
@@ -15,6 +16,15 @@ const project = mkdtempSync(join(tmpdir(), "capella-v1-project-"));
 writeFileSync(join(project, "hello.txt"), "The secret word is PERSIMMON.\n");
 const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, "c"), XDG_DATA_HOME: join(home, "d"), XDG_STATE_HOME: join(home, "s"), XDG_CACHE_HOME: join(home, "k") };
 for (const name of Object.keys(env)) if (/(_API_KEY|_TOKEN|_SECRET)$/i.test(name)) delete env[name];
+
+// Opt-in (CAPELLA_GO_AUTH=1): only the `opencode-go` entry of the user's auth.json is copied into the throwaway home, so a
+// Go model can be tested without 1.x ever touching the real data folder. The copy is deleted with the home.
+if (process.env.CAPELLA_GO_AUTH === "1") {
+  const real = JSON.parse(readFileSync(join(homedir(), ".local", "share", "opencode", "auth.json"), "utf8")) as Record<string, unknown>;
+  if (!real["opencode-go"]) throw new Error("no opencode-go entry in auth.json");
+  mkdirSync(join(home, "d", "opencode"), { recursive: true });
+  writeFileSync(join(home, "d", "opencode", "auth.json"), JSON.stringify({ "opencode-go": real["opencode-go"] }));
+}
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -34,7 +44,7 @@ try {
   await session.start();
   check("detected as opencode 1.x", session.generation === "v1", `${session.generation} ${session.version}`);
   check("compatibility is OK for the tested 1.x", session.compat?.status === "ok" || session.compat?.status === "newer", session.compat?.status);
-  check("the catalog has the free Zen model and no secret", session.models.some((m) => `${m.providerId}/${m.modelId}` === model && m.free) && !JSON.stringify(session.models).includes("public"), session.models.length);
+  check("the catalog has the chosen model (free when it is a Zen one) and no secret", session.models.some((m) => `${m.providerId}/${m.modelId}` === model && (m.free || !model.startsWith("opencode/"))) && !JSON.stringify(session.models).includes("public"), session.models.length);
   check("usage is absent on 1.x", (await session.usage()) === undefined);
 
   await session.send("Read hello.txt and tell me the secret word, in one short sentence.");

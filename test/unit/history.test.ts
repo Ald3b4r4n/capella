@@ -117,3 +117,8 @@ test("a stored message with attachments replays their names, and small images th
   const first = items[0];
   assert.deepEqual(first?.kind === "user" && first.files, [{ name: "red.png", mime: "image/png", thumb: `data:image/png;base64,${png}` }, { name: "notes.txt", mime: "text/plain", thumb: undefined }]);
 });
+
+test("the real free-model cap (observed on 2.2.5) is recognised as a usage limit with no reset time", () => {
+  const error = mapTurnError({ type: "provider.free-limit", message: "Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.", status: 429 });
+  assert.deepEqual([error?.rateLimited, error?.retryAfterMs, error?.status], [true, undefined, 429]);
+});

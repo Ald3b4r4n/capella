@@ -7,7 +7,7 @@
  * resolved), only for text files up to 1 MB. Nothing outside is ever read or shown. Edits made by a shell command
  * (sed, a script, git) do not pass through an edit tool and are NOT seen here; the page says so.
  */
-import { readFile, realpath, stat } from "node:fs/promises";
+import { lstat, readFile, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import type { ChatEvent } from "../opencode/events.ts";
 import { insideRoots, looksLikeText, MAX_TEXT_BYTES } from "./attachments.ts";
@@ -47,6 +47,12 @@ interface FileRecord {
   edits: number;
 }
 
+/**
+ * File times on Windows tick about every 16 ms, so a file created a moment after a tool started can read as created a few
+ * milliseconds BEFORE it (seen with a model that issues an edit and a write at once). A real file that predates the call is
+ * older than this by far.
+ */
+const BIRTH_TOLERANCE_MS = 60;
 const SHOWN_LINES = 80;
 const PATH_KEYS = ["path", "filePath", "file_path", "file"];
 
@@ -61,6 +67,8 @@ export function targetOf(name: string, input: unknown): string | undefined {
 type Snapshot = { ok: true; text: string | null } | { ok: false };
 
 export class ChangeTracker {
+  /** Why a call was not turned into a change, newest last: the diagnostics and the tests read it. */
+  readonly skipped: string[] = [];
   private readonly roots: string[];
   private readonly names = new Map<string, string>();
   private readonly pending = new Map<string, { abs: string; before: string | null; startedAt: number }>();
@@ -83,6 +91,15 @@ export class ChangeTracker {
   /** Inside the open folder(s); a file that does not exist yet counts when its nearest existing folder does. */
   private async allowed(abs: string): Promise<boolean> {
     if (await insideRoots(abs, this.roots)) return true;
+    // A file opencode is writing at this very moment can fail to resolve for an instant (seen on Windows with a file created
+    // by a tool). It is still inside when it is a plain file directly in a folder that is inside, and refused if it is a link.
+    try {
+      const entry = await lstat(abs);
+      if (entry.isSymbolicLink()) return false;
+      return insideRoots(dirname(abs), this.roots);
+    } catch {
+      // it does not exist yet: the check below
+    }
     let here = abs;
     for (let i = 0; i < 64; i++) {
       try {
@@ -133,9 +150,11 @@ export class ChangeTracker {
       case "tool-input": {
         const target = targetOf(this.names.get(event.callId) ?? "", event.input);
         if (!target || !this.roots[0]) return undefined;
+        this.skipped.length > 200 && this.skipped.shift();
         const abs = resolve(this.roots[0], target);
         const before = await this.snapshot(abs);
         if (before.ok) this.pending.set(event.callId, { abs, before: before.text, startedAt: this.startedAt.get(event.callId) ?? Date.now() });
+        else this.skipped.push(`${event.callId}: ${target} is outside the folder, binary or too large`);
         return undefined;
       }
       case "tool-failed":
@@ -146,10 +165,16 @@ export class ChangeTracker {
         if (!wanted) return undefined;
         this.pending.delete(event.callId);
         const after = await this.snapshot(wanted.abs);
-        if (!after.ok) return undefined;
+        if (!after.ok) {
+          this.skipped.push(`${event.callId}: could not read ${wanted.abs} after the call`);
+          return undefined;
+        }
         const before = await this.beforeOf(wanted, after.text, event.files);
         // A file rewritten by `write` whose earlier text cannot be recovered is not listed: a diff would be a guess.
-        if (before === "unknown") return undefined;
+        if (before === "unknown") {
+          this.skipped.push(`${event.callId}: ${wanted.abs} was already in its new state when Capella looked, and its earlier text could not be recovered`);
+          return undefined;
+        }
         wanted.before = before;
         const change = changeOf(wanted.before, after.text);
         if (!change || (change.additions === 0 && change.deletions === 0 && change.status === "modified")) return undefined;
@@ -185,7 +210,7 @@ export class ChangeTracker {
     if (after !== null) {
       try {
         const info = await stat(wanted.abs);
-        if (info.birthtimeMs >= wanted.startedAt - 5) return null;
+        if (info.birthtimeMs >= wanted.startedAt - BIRTH_TOLERANCE_MS) return null;
       } catch {
         // fall through
       }

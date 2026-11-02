@@ -51,6 +51,8 @@ export interface ModelRow {
   free: boolean;
   /** The catalog lists image input; undefined when it does not say. */
   images?: boolean;
+  /** The model's own reasoning-effort options, in the catalog's order; empty when it has none. */
+  variants: string[];
 }
 
 /** One stored chat in the history list. */
@@ -82,6 +84,9 @@ export type ToWebview =
   | { type: "model"; ref: string }
   | { type: "notice"; text: string; error?: boolean }
   | { type: "usage"; usage: UsageView }
+  | { type: "models"; models: ModelRow[]; model?: string }
+  | { type: "effort"; effort?: string }
+  | { type: "web"; policy: "mode" | "allow" | "deny" }
   | { type: "sessions"; rows: SessionRowView[] }
   | { type: "replay"; items: ReplayItem[] }
   | { type: "modelNote"; text: string }
@@ -103,6 +108,10 @@ export type FromWebview =
   | { type: "listSessions"; search?: string }
   | { type: "openSession"; id: string; fork: boolean }
   | { type: "openPreview"; url: string }
+  | { type: "previewMenu" }
+  | { type: "refreshModels" }
+  | { type: "setEffort"; effort?: string }
+  | { type: "setWeb"; policy: "mode" | "allow" | "deny" }
   | { type: "pickFiles" }
   | { type: "addCurrentFile" }
   | { type: "addSelection" }

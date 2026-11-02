@@ -36,3 +36,17 @@ test("modeOf recognises a session by its agent and rules", () => {
   assert.equal(modeOf("build", []), "bypass");
   assert.equal(modeOf("plan", []), undefined);
 });
+
+test("web access is laid over the mode: follow it, allow, or deny", async () => {
+  const { rulesWith, v1Rules } = await import("../../src/opencode/modes.ts");
+  const review = modeById("review");
+  assert.deepEqual(rulesWith(review, "mode"), review.rules);
+  const web = (rules: ReturnType<typeof rulesWith>) => rules.filter((r) => /^web/.test(r.action)).map((r) => `${r.action}:${r.effect}`);
+  assert.deepEqual(web(rulesWith(review, "deny")), ["webfetch:deny", "websearch:deny"]);
+  assert.deepEqual(web(rulesWith(review, "allow")), ["webfetch:allow", "websearch:allow"]);
+  // the rest of the mode is untouched
+  assert.deepEqual(rulesWith(review, "deny").filter((r) => !/^web/.test(r.action)), review.rules.filter((r) => !/^web/.test(r.action)));
+  // on 1.x every action is explicit so that the new set overrides the old
+  assert.deepEqual(v1Rules(modeById("plan"), "deny").map((r) => `${r.permission}:${r.action}`), ["edit:deny", "bash:deny", "webfetch:deny", "websearch:deny"]);
+  assert.deepEqual(v1Rules(modeById("accept-edits"), "allow").map((r) => `${r.permission}:${r.action}`), ["edit:allow", "bash:ask", "webfetch:allow", "websearch:allow"]);
+});

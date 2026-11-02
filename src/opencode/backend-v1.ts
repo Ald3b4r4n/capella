@@ -3,7 +3,7 @@ import type { OpencodeClient } from "./client.ts";
 import { familyOf, type MapResult, type ModelInfo } from "./events.ts";
 import { V1EventMapper } from "./events-v1.ts";
 import { mapSessionRowsV1, replayItemsV1, type ReplayItem, type SessionRow } from "./history.ts";
-import { modeById, v1Rules, type ModeId } from "./modes.ts";
+import { modeById, v1Rules, type ModeId, type WebPolicy } from "./modes.ts";
 import type { UsageSnapshot } from "./usage.ts";
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -59,6 +59,7 @@ export class BackendV1 implements Backend {
   private readonly events = new V1EventMapper();
   private agent = "plan";
   private model?: ModelRef;
+  private effort?: string;
 
   constructor(client: OpencodeClient) {
     this.client = client;
@@ -88,30 +89,32 @@ export class BackendV1 implements Backend {
     return first ? { providerId: first[0], modelId: first[1] as string } : undefined;
   }
 
-  async createSession(mode: ModeId, model: ModelRef): Promise<string> {
+  async createSession(mode: ModeId, model: ModelRef, effort?: string, web: WebPolicy = "mode"): Promise<string> {
     const m = modeById(mode);
     this.agent = m.agent;
     this.model = model;
-    const created = await this.client.post<{ id?: string }>("/session", { title: "Capella", agent: m.agent, model: { id: model.modelId, providerID: model.providerId }, permission: v1Rules(m) });
+    this.effort = effort;
+    const created = await this.client.post<{ id?: string }>("/session", { title: "Capella", agent: m.agent, model: { id: model.modelId, providerID: model.providerId }, permission: v1Rules(m, web) });
     if (!created?.id) throw new Error("opencode did not return a session id");
     return created.id;
   }
 
-  async selectModel(_sessionId: string, model: ModelRef): Promise<void> {
-    // 1.x has no "set the session's model" call: the model rides on each prompt.
+  async selectModel(_sessionId: string, model: ModelRef, effort?: string): Promise<void> {
+    // 1.x has no "set the session's model" call: the model (and its variant) ride on each prompt.
     this.model = model;
+    this.effort = effort;
   }
 
-  async applyMode(sessionId: string, mode: ModeId): Promise<void> {
+  async applyMode(sessionId: string, mode: ModeId, web: WebPolicy = "mode"): Promise<void> {
     const m = modeById(mode);
     this.agent = m.agent;
-    await this.client.request("PATCH", `/session/${sessionId}`, { body: { permission: v1Rules(m) } });
+    await this.client.request("PATCH", `/session/${sessionId}`, { body: { permission: v1Rules(m, web) } });
   }
 
   async prompt(sessionId: string, text: string, files: readonly PromptFile[]): Promise<void> {
     if (!this.model) throw new Error("no model is selected");
     const parts: unknown[] = [{ type: "text", text }, ...files.map((f) => ({ type: "file", mime: mimeFor(f), url: f.uri, filename: f.name }))];
-    await this.client.post(`/session/${sessionId}/prompt_async`, { model: { providerID: this.model.providerId, modelID: this.model.modelId }, agent: this.agent, parts });
+    await this.client.post(`/session/${sessionId}/prompt_async`, { model: { providerID: this.model.providerId, modelID: this.model.modelId }, agent: this.agent, ...(this.effort ? { variant: this.effort } : {}), parts });
   }
 
   async interrupt(sessionId: string): Promise<void> {
@@ -158,7 +161,10 @@ export class BackendV1 implements Backend {
   }
 
   mapEvent(raw: string, sessionId: string): MapResult[] {
-    return this.events.map(raw, sessionId);
+    const results = this.events.map(raw, sessionId);
+    // A spent free allowance ends the turn on our side while 1.x keeps retrying it: stop that.
+    if (results.some((r) => r.kind === "event" && r.event.type === "turn-ended" && r.event.error?.type === "FreeTierLimit")) void this.interrupt(sessionId).catch(() => undefined);
+    return results;
   }
 
   resetEvents(): void {

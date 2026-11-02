@@ -16,7 +16,7 @@ function project() {
   mkdirSync(join(root, "src"));
   writeFileSync(join(root, "plan.txt"), "alpha\nbeta\ngamma\n");
   // Real files are older than the call that edits them: wait, so the creation-time check sees a file that predates it.
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 40);
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);
   return root;
 }
 
