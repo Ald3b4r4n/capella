@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.14 (unreleased)
+## 0.1.14 (2026-11-03)
 
 - **Worktrees.** Tools has a new **Worktrees** section (opencode 2.x): make a separate copy of the project with opencode, start a chat that works in it (the header shows `worktree <name>`), open it in a new window, go back to the project, remove it. Removal is asked about, naming the folder, and asked again when the copy has changes that are not committed (opencode refuses without force). Only worktrees opencode made can be removed, never the project; a folder named by the page is used only when opencode lists it.
 - Measured on 2.2.5: opencode's worktree has **no branch** (a detached HEAD), so Capella says so and sends the user to git to keep the work. Worktrees need a git project with a commit; the project is found through opencode's list, or through its first commit when opencode has not met the folder yet.
