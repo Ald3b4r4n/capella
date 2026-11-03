@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.10 (unreleased)
+## 0.1.10 (2026-11-03)
 
 - **Fix: the agent's questions are shown.** When the agent used its question tool, opencode 2.x announced it as a `form.created` frame (1.x as `question.asked`), which Capella did not know, so nothing appeared and the turn waited for ever (it happened in a test). Now a card shows the question with its options (one or several, a box for an answer of your own where allowed, text, number, yes or no, a link); **Send answer** replies, **Don't answer** declines, and the agent goes on. A question still pending when the connection came back, or opened from a stored chat's pending list, is shown once. A card whose question the agent no longer waits for (the turn was stopped) says so.
 - The answer the page sends is checked before it is forwarded (plain data of the shapes opencode takes, small, simple keys). Checked with a real model on 2.2.5 and 1.19.5 (`scripts/check-questions.ts`) and in both editors, answering and declining.
