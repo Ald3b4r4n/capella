@@ -1,6 +1,6 @@
 import type { AccountConnection, AccountInfo, Backend, FormField, McpConfig, McpServerInfo, McpStatus, ModelRef, PendingApproval, OauthAttempt, OauthMethod, OauthStatus, PluginInfo, PromptFile, PromptOptions, SkillInfo, SlashEntry } from "./backend.ts";
 import { ApiError, type OpencodeClient } from "./client.ts";
-import { mapFrame, mapModels, parseFrame, type MapResult, type ModelInfo } from "./events.ts";
+import { mapForm, mapFrame, mapModels, parseFrame, type MapResult, type ModelInfo, type QuestionRequest, type QuestionValue } from "./events.ts";
 import { mapSessionRows, replayItems, type ReplayItem, type SessionRow } from "./history.ts";
 import { modeById, rulesWith, type Extras, type ModeId, type WebPolicy } from "./modes.ts";
 import { mapUsageLimits, type UsageSnapshot } from "./usage.ts";
@@ -96,6 +96,22 @@ export class BackendV2 implements Backend {
 
   async compact(sessionId: string): Promise<void> {
     await this.client.post(`/api/session/${sessionId}/compact`, {});
+  }
+
+  async questions(sessionId: string): Promise<QuestionRequest[]> {
+    const rows = await this.client.get<{ data?: unknown[] }>(`/api/session/${pathId(sessionId)}/form`);
+    return (rows?.data ?? []).flatMap((row) => {
+      const request = mapForm(row);
+      return request ? [request] : [];
+    });
+  }
+
+  async answerQuestion(sessionId: string, requestId: string, answers: Record<string, QuestionValue>): Promise<void> {
+    await this.client.post(`/api/session/${pathId(sessionId)}/form/${pathId(requestId)}/reply`, { answer: answers });
+  }
+
+  async rejectQuestion(sessionId: string, requestId: string, message?: string): Promise<void> {
+    await this.client.request("DELETE", `/api/session/${pathId(sessionId)}/form/${pathId(requestId)}`, message ? { query: { message } } : {});
   }
 
   async accounts(): Promise<AccountInfo[]> {

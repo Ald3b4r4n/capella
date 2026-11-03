@@ -10,6 +10,7 @@
     "GET /mcp",
     "GET /permission",
     "GET /provider",
+    "GET /question",
     "GET /session",
     "GET /session/{sessionID}",
     "GET /session/{sessionID}/message",
@@ -18,6 +19,8 @@
     "POST /mcp",
     "POST /mcp/{name}/connect",
     "POST /mcp/{name}/disconnect",
+    "POST /question/{requestID}/reject",
+    "POST /question/{requestID}/reply",
     "POST /session",
     "POST /session/{sessionID}/abort",
     "POST /session/{sessionID}/command",
@@ -27,5 +30,5 @@
     "POST /session/{sessionID}/summarize",
     "PUT /auth/{providerID}"
   ],
-  "fingerprint": "35932a152728"
+  "fingerprint": "363c4463a6ca"
 }

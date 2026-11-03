@@ -5,7 +5,7 @@
  * them; a 1.x prompt carries them), and nothing above this file should have to know.
  */
 import type { Generation } from "./compat.ts";
-import type { MapResult, ModelInfo } from "./events.ts";
+import type { MapResult, ModelInfo, QuestionRequest, QuestionValue } from "./events.ts";
 import type { ReplayItem, SessionRow } from "./history.ts";
 import type { Extras, ModeId, WebPolicy } from "./modes.ts";
 import type { UsageSnapshot } from "./usage.ts";
@@ -158,6 +158,12 @@ export interface Backend {
   runCommand(sessionId: string, name: string, args: string, files: readonly PromptFile[]): Promise<void>;
   /** Asks the server to summarise the conversation to free context. */
   compact(sessionId: string): Promise<void>;
+  /** The questions the agent has asked this session and nobody has answered yet. */
+  questions(sessionId: string): Promise<QuestionRequest[]>;
+  /** Answers a question, keyed by the field keys of the request. Capella never answers by itself. */
+  answerQuestion(sessionId: string, requestId: string, answers: Record<string, QuestionValue>): Promise<void>;
+  /** Declines to answer. The agent is told the user did not answer. */
+  rejectQuestion(sessionId: string, requestId: string, message?: string): Promise<void>;
   /** The providers and how each is connected, without any secret. */
   accounts(): Promise<AccountInfo[]>;
   /** Stores an API key in opencode for this provider. The key is never logged, echoed or kept by Capella. */

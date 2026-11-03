@@ -9,6 +9,9 @@ const expected = "Basic " + Buffer.from(`opencode:${password}`).toString("base64
 const calls = [];
 const listeners = new Set();
 const pending = new Map();
+let pendingQuestion;
+let questionResolve;
+let questionCounter = 0;
 const mcp = { docs: { status: "connected" } };
 let connected = ["opencode"];
 let n = 0;
@@ -37,7 +40,22 @@ async function runTurn(sid, text) {
   emit("message.part.updated", { sessionID: sid, part: { id: "prt_u" + n, messageID: user, sessionID: sid, type: "text", text } });
   emit("message.updated", { sessionID: sid, info: { id: assistant, role: "assistant", sessionID: sid } });
   emit("message.part.updated", { sessionID: sid, part: { id: "prt_s" + n, messageID: assistant, sessionID: sid, type: "step-start" } });
-  if (text.startsWith("ask:")) {
+  if (text.startsWith("question:")) {
+    // The agent's question tool: a request that waits for the user (answered or declined).
+    const part = { id: "prt_q" + n, messageID: assistant, sessionID: sid, type: "tool", tool: "question", callID: "call_q" };
+    const questions = [{ question: "Which colour do you prefer?", header: "Colour preference", options: [{ label: "Red", description: "warm" }, { label: "Blue", description: "cool" }] }, { question: "Anything else?", header: "Extras", multiple: true, options: [{ label: "Alpha", description: "" }, { label: "Beta", description: "" }] }];
+    emit("message.part.updated", { sessionID: sid, part: { ...part, state: { status: "running", input: { questions } } } });
+    pendingQuestion = { id: "que_" + ++questionCounter, sessionID: sid, questions, tool: { messageID: assistant, callID: "call_q" } };
+    emit("question.asked", pendingQuestion);
+    const outcome = await new Promise((resolve) => (questionResolve = resolve));
+    pendingQuestion = undefined;
+    if (outcome.rejected) emit("message.part.updated", { sessionID: sid, part: { ...part, state: { status: "error", input: { questions }, error: "The user dismissed this question" } } });
+    else {
+      emit("message.part.updated", { sessionID: sid, part: { ...part, state: { status: "completed", input: { questions }, output: "User has answered: " + JSON.stringify(outcome.answers) } } });
+      const textPart = { id: "prt_x" + n, messageID: assistant, sessionID: sid, type: "text" };
+      emit("message.part.updated", { sessionID: sid, part: { ...textPart, text: "You picked " + JSON.stringify(outcome.answers), time: { start: 1, end: 2 } } });
+    }
+  } else if (text.startsWith("ask:")) {
     const command = text.slice(4);
     const part = { id: "prt_t" + n, messageID: assistant, sessionID: sid, type: "tool", tool: "bash", callID: "call_1" };
     emit("message.part.updated", { sessionID: sid, part: { ...part, state: { status: "pending", input: {}, raw: "" } } });
@@ -92,6 +110,7 @@ const server = createServer(async (req, res) => {
     });
   if (req.method === "GET" && path === "/config") return json(res, 200, { username: "x", plugin: ["some-plugin@1.2.3", ["other-plugin", { opt: 1 }]] });
   if (req.method === "GET" && path === "/mcp") return json(res, 200, mcp);
+  if (req.method === "GET" && path === "/question") return json(res, 200, pendingQuestion ? [pendingQuestion] : []);
   if (req.method === "GET" && path === "/provider") return json(res, 200, { all: [{ id: "opencode", name: "OpenCode", env: ["OPENCODE_API_KEY"], models: {} }, { id: "opencode-go", name: "OpenCode Go", env: ["OPENCODE_API_KEY"], models: {} }], default: {}, connected });
   const authRoute = /^\/auth\/([^/]+)$/.exec(path);
   if (authRoute && req.method === "DELETE") {
@@ -136,6 +155,18 @@ const server = createServer(async (req, res) => {
     const id = path.split("/").pop();
     if (body.key === "BAD-KEY") return json(res, 400, { message: "The key BAD-KEY was rejected" });
     if (!connected.includes(id)) connected.push(id);
+    return json(res, 200, true);
+  }
+  const questionRoute = /^\/question\/(que_\w+)\/(reply|reject)$/.exec(path);
+  if (req.method === "POST" && questionRoute) {
+    if (!pendingQuestion) return json(res, 404, { message: "no such question" });
+    if (questionRoute[2] === "reply") {
+      emit("question.replied", { sessionID: pendingQuestion.sessionID, requestID: questionRoute[1], answers: body.answers });
+      questionResolve({ answers: body.answers });
+    } else {
+      emit("question.rejected", { sessionID: pendingQuestion.sessionID, requestID: questionRoute[1] });
+      questionResolve({ rejected: true });
+    }
     return json(res, 200, true);
   }
   if (req.method === "POST" && path === "/mcp") {

@@ -3,6 +3,8 @@ import type { AttachmentView, ChangeRowView, FileChangeView, FromWebview, ModeRo
 import type { ReplayItem } from "../opencode/history.ts";
 import { findLocalUrl } from "../ui/preview.ts";
 import { renderMarkdown } from "./markdown.ts";
+import type { QuestionField, QuestionRequest, QuestionValue } from "../opencode/events.ts";
+import { visible } from "../ui/questions.ts";
 
 declare function acquireVsCodeApi(): { postMessage(message: FromWebview): void };
 const vscode = acquireVsCodeApi();
@@ -328,6 +330,153 @@ function approvalCard(event: Extract<SessionEvent, { type: "approval-requested" 
   approvals.set(event.requestId, card);
 }
 
+// ---- the agent asks the user ---------------------------------------------------------------------------------------
+
+const questionCards = new Map<string, { card: HTMLElement; values: Record<string, QuestionValue | undefined> }>();
+
+const summary = (value: QuestionValue | undefined): string => (value === undefined ? "" : Array.isArray(value) ? value.join(", ") : typeof value === "boolean" ? (value ? "Yes" : "No") : String(value));
+
+/**
+ * A question of the agent, as a card in the conversation: the options as buttons, a box for an answer of the user's own where
+ * that is allowed, and Send / Don't answer. Nothing is sent until the user presses Send, and a field that does not apply
+ * yet (a `when` condition of a 2.x form) is not shown. The agent waits for the answer, so the card stays until it is resolved.
+ */
+function questionCard(request: QuestionRequest): void {
+  if (questionCards.has(request.requestId)) return;
+  const step = addStep("approval question");
+  const card = el("div", "approval-card question-card");
+  card.append(el("div", "what", request.title));
+  const values: Record<string, QuestionValue | undefined> = {};
+  for (const f of request.fields) if (f.default !== undefined) values[f.key] = f.default;
+  questionCards.set(request.requestId, { card, values });
+  const body = el("div", "q-fields");
+  const send = el("button", "btn allow", "Send answer");
+  const decline = el("button", "btn reject", "Don't answer");
+  send.type = decline.type = "button";
+
+  const complete = (): boolean =>
+    request.fields.every((f) => {
+      if (!visible(f, values) || f.kind === "link" || f.required !== true) return true;
+      const v = values[f.key];
+      return !(v === undefined || v === "" || (Array.isArray(v) && v.length === 0));
+    });
+  const refresh = (): void => {
+    send.disabled = !complete();
+    paintFields();
+  };
+
+  const option = (field: QuestionField, o: { value: string; label: string; description?: string }, selected: boolean, onPick: () => void, multi: boolean): HTMLElement => {
+    const b = el("button", `opt${selected ? " on" : ""}`);
+    b.type = "button";
+    b.setAttribute("role", multi ? "checkbox" : "radio");
+    b.setAttribute("aria-checked", String(selected));
+    b.append(el("span", "mark", multi ? (selected ? "\u2611" : "\u2610") : selected ? "\u25c9" : "\u25cb"), el("span", "opt-text", o.label));
+    if (o.description && o.description !== o.label) b.append(el("small", "faint", o.description));
+    b.addEventListener("click", onPick);
+    return b;
+  };
+
+  const paintFields = (): void => {
+    body.replaceChildren();
+    for (const f of request.fields) {
+      if (!visible(f, values)) continue;
+      const box = el("div", "q-field");
+      box.append(el("div", "q-title", f.title));
+      if (f.description && f.description !== f.title) box.append(el("div", "faint small", f.description));
+      if (f.kind === "choice" || f.kind === "multi") {
+        const multi = f.kind === "multi";
+        const chosen = multi ? ((values[f.key] as string[] | undefined) ?? []) : values[f.key] === undefined ? [] : [String(values[f.key])];
+        const known = new Set((f.options ?? []).map((o) => o.value));
+        for (const o of f.options ?? []) {
+          box.append(
+            option(f, o, chosen.includes(o.value), () => {
+              if (multi) values[f.key] = chosen.includes(o.value) ? chosen.filter((c) => c !== o.value) : [...chosen, o.value];
+              else values[f.key] = o.value;
+              refresh();
+            }, multi),
+          );
+        }
+        if (f.custom) {
+          const own = el("input");
+          own.type = "text";
+          own.placeholder = multi ? "Or add your own…" : "Or type your own answer…";
+          own.setAttribute("aria-label", `Your own answer to: ${f.title}`);
+          own.value = chosen.filter((c) => !known.has(c)).join(", ");
+          own.addEventListener("input", () => {
+            const mine = own.value.trim();
+            if (multi) values[f.key] = [...chosen.filter((c) => known.has(c)), ...(mine ? [mine] : [])];
+            else values[f.key] = mine === "" ? undefined : mine;
+            send.disabled = !complete();
+          });
+          box.append(own);
+        }
+      } else if (f.kind === "boolean") {
+        for (const [label, v] of [["Yes", true], ["No", false]] as const) box.append(option(f, { value: String(v), label }, values[f.key] === v, () => { values[f.key] = v; refresh(); }, false));
+      } else if (f.kind === "link") {
+        const open = el("button", "btn", f.url ? `Open ${(() => { try { return new URL(f.url!).host; } catch { return "the page"; } })()}` : "Open the page");
+        open.type = "button";
+        open.addEventListener("click", () => f.url && post({ type: "openLink", url: f.url }));
+        box.append(open);
+      } else {
+        const input = f.kind === "text" ? el("textarea") : el("input");
+        if (input instanceof HTMLInputElement) {
+          input.type = "number";
+          if (f.kind === "integer") input.step = "1";
+          if (f.min !== undefined) input.min = String(f.min);
+          if (f.max !== undefined) input.max = String(f.max);
+        } else input.rows = 2;
+        input.value = summary(values[f.key]);
+        input.setAttribute("aria-label", f.title);
+        input.addEventListener("input", () => {
+          const raw = input.value;
+          values[f.key] = f.kind === "text" ? raw : raw.trim() === "" ? undefined : Number(raw);
+          send.disabled = !complete();
+        });
+        box.append(input);
+      }
+      body.append(box);
+    }
+  };
+
+  const finish = (text: string): void => {
+    send.disabled = decline.disabled = true;
+    for (const b of body.querySelectorAll<HTMLElement>("button, input, textarea")) (b as HTMLButtonElement).disabled = true;
+    card.querySelector(".verdict")?.remove();
+    card.append(el("div", "verdict", text));
+  };
+  send.addEventListener("click", () => {
+    const answers: Record<string, QuestionValue> = {};
+    for (const f of request.fields) {
+      const v = values[f.key];
+      if (visible(f, values) && f.kind !== "link" && v !== undefined && v !== "") answers[f.key] = v;
+    }
+    finish("Answer sent…");
+    post({ type: "answerQuestion", requestId: request.requestId, answers });
+  });
+  decline.addEventListener("click", () => {
+    finish("Declining…");
+    post({ type: "rejectQuestion", requestId: request.requestId });
+  });
+  const btns = el("div", "btns");
+  btns.append(send, decline);
+  card.append(body, btns);
+  step.append(card);
+  paintFields();
+  send.disabled = !complete();
+  card.dataset.requestId = request.requestId;
+}
+
+function questionResolved(requestId: string, outcome: "answered" | "rejected", answers?: Record<string, QuestionValue>): void {
+  const found = questionCards.get(requestId);
+  if (!found) return;
+  const { card, values } = found;
+  card.classList.add("resolved");
+  for (const b of card.querySelectorAll<HTMLElement>("button, input, textarea")) (b as HTMLButtonElement).disabled = true;
+  card.querySelector(".verdict")?.remove();
+  const shown = answers && Object.keys(answers).length > 0 ? Object.values(answers).map((v) => summary(v as QuestionValue)).filter(Boolean).join(" · ") : Object.values(values).map((v) => summary(v)).filter(Boolean).join(" · ");
+  card.append(el("div", "verdict", outcome === "answered" ? (shown ? `You answered: ${shown}` : "Answered") : "You chose not to answer."));
+}
+
 /** One Copy button under the last text of a finished turn: copies the whole answer (code blocks keep their own button). */
 function addCopyAnswer(finished: HTMLElement): void {
   const parts = [...finished.querySelectorAll<HTMLElement>(".md")];
@@ -406,6 +555,12 @@ function onEvent(event: SessionEvent): void {
       case "approval-requested":
         approvalCard(event);
         break;
+      case "question-asked":
+        questionCard(event.request);
+        break;
+      case "question-resolved":
+        questionResolved(event.requestId, event.outcome, event.answers);
+        break;
       case "approval-resolved": {
         const card = approvals.get(event.requestId);
         if (card) {
@@ -426,6 +581,14 @@ function onEvent(event: SessionEvent): void {
         break;
       case "turn-ended": {
         setBusy(false);
+        // a question the agent is no longer waiting for (the turn was stopped, or failed)
+        for (const [id, found] of questionCards) if (!found.card.classList.contains("resolved")) {
+          found.card.classList.add("resolved");
+          for (const b of found.card.querySelectorAll<HTMLElement>("button, input, textarea")) (b as HTMLButtonElement).disabled = true;
+          found.card.querySelector(".verdict")?.remove();
+          found.card.append(el("div", "verdict", "The agent is no longer waiting for this."));
+          questionCards.delete(id);
+        }
         turn?.classList.remove("live");
         if (turn) addCopyAnswer(turn);
         if (turn && (tokens.input || tokens.output)) turn.append(el("div", "foot", `${tokens.input.toLocaleString()} in · ${tokens.output.toLocaleString()} out`));
@@ -1454,6 +1617,7 @@ window.addEventListener("message", (e: MessageEvent<ToWebview>) => {
       blocks.clear();
       tools.clear();
       approvals.clear();
+      questionCards.clear();
       turn = undefined;
       setBusy(false);
       say("");

@@ -20,6 +20,7 @@ import { chatHtml } from "./chatHtml.ts";
 import type { AccountView, AttachmentView, FromWebview, McpRowView, ModeRow, ModelRow, QueueItemView, SlashEntryView, ToolsView, ToWebview } from "./protocol.ts";
 import type { AccountInfo } from "../opencode/backend.ts";
 import { imagePathsIn } from "./browserPreset.ts";
+import { sanitizeAnswers } from "./questions.ts";
 import { validMcpName } from "./mcpInput.ts";
 import { McpManager } from "./mcpManager.ts";
 import { summarize } from "./mcpStore.ts";
@@ -958,6 +959,19 @@ export class ChatPanel {
         }
         case "openSkill":
           await this.openSkill(message.name);
+          break;
+        case "answerQuestion": {
+          if (!this.session) break;
+          const answers = sanitizeAnswers(message.answers);
+          if (!answers) {
+            this.notice("That answer could not be sent: it is not in a form opencode takes.", true);
+            break;
+          }
+          await this.session.answerQuestion(message.requestId, answers).catch((e) => this.notice(`Could not send the answer: ${e instanceof Error ? e.message : String(e)}`, true));
+          break;
+        }
+        case "rejectQuestion":
+          if (this.session) await this.session.rejectQuestion(message.requestId, "The user chose not to answer.").catch((e) => this.notice(`Could not decline the question: ${e instanceof Error ? e.message : String(e)}`, true));
           break;
         case "accountConnect":
           await this.connectAccount(message.id, message.method);

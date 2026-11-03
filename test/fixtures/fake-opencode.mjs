@@ -35,6 +35,8 @@ const readBody = (req) =>
 
 // Messages sent while a turn runs: `delivery: "queue"` waits for the end of the work, `steer` joins it at the next step.
 const inbox = [];
+let pendingForm;
+let formResolve;
 let mcp = [{ name: "docs", status: { status: "connected" } }];
 // Providers and their stored credentials. `GET /api/credential` carries the secrets themselves, like the real one.
 let credentials = [{ id: "cred_zen1", integrationID: "opencode", label: "Default", active: true, method: "oauth", value: { type: "oauth", access: "SECRET-ACCESS", refresh: "SECRET-REFRESH" } }];
@@ -70,7 +72,33 @@ async function runStep(text) {
     text = text.slice(5);
   }
   emit("session.step.started", { sessionID: sid, assistantMessageID: msg, agent: session.agent, model: { id: selected?.id, providerID: selected?.providerID } });
-  if (text.startsWith("todo:")) {
+  if (text.startsWith("form:") || text.startsWith("richform:")) {
+    // The agent's question tool: the tool call, then a form that waits for the user (answered or declined).
+    const rich = text.startsWith("richform:");
+    const fields = rich
+      ? [
+          { key: "q0", title: "Colour", description: "Which colour?", type: "string", options: [{ value: "Red", label: "Red", description: "warm" }, { value: "Blue", label: "Blue" }], custom: true, required: true },
+          { key: "q1", title: "Extras", type: "multiselect", options: [{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }], minItems: 1 },
+          { key: "q2", title: "Ship it?", type: "boolean" },
+          { key: "q3", title: "Why blue?", type: "string", when: [{ key: "q0", op: "eq", value: "Blue" }] },
+          { key: "q4", title: "How many?", type: "integer", minimum: 1, maximum: 9 },
+          { key: "q5", title: "Read this first", type: "external", url: "https://example.com/doc" },
+        ]
+      : [{ key: "q0", title: "Colour preference", description: "Which colour do you prefer?", type: "string", options: [{ value: "Red", label: "Red", description: "warm" }, { value: "Blue", label: "Blue" }], custom: true }];
+    const form = { id: "frm_1", sessionID: sid, title: "Questions", metadata: { kind: "question", tool: { messageID: msg, id: "call_q" } }, fields };
+    emit("session.tool.input.started", { sessionID: sid, assistantMessageID: msg, id: "call_q", name: "question" });
+    emit("session.tool.called", { sessionID: sid, assistantMessageID: msg, id: "call_q", input: { questions: [] }, executed: false });
+    pendingForm = form;
+    emit("form.created", { form });
+    const outcome = await new Promise((resolve) => (formResolve = resolve));
+    pendingForm = undefined;
+    if (outcome.rejected) emit("session.tool.failed", { sessionID: sid, assistantMessageID: msg, id: "call_q", error: { type: "tool.execution", message: outcome.message ?? "declined" }, executed: false });
+    else {
+      emit("session.tool.success", { sessionID: sid, assistantMessageID: msg, id: "call_q", content: [{ type: "text", text: "User has answered: " + JSON.stringify(outcome.answer) }] });
+      emit("session.text.started", { sessionID: sid, assistantMessageID: msg, ordinal: 0 });
+      emit("session.text.ended", { sessionID: sid, assistantMessageID: msg, ordinal: 0, text: "You picked " + JSON.stringify(outcome.answer) });
+    }
+  } else if (text.startsWith("todo:")) {
     // A task list the agent keeps: the tool call carries the whole list.
     const todos = [{ content: "Read the file", status: "completed" }, { content: "Write the summary", status: "in_progress" }, { content: "Check it", status: "pending" }];
     emit("session.tool.input.started", { sessionID: sid, assistantMessageID: msg, id: "call_todo", name: "todowrite" });
@@ -251,6 +279,20 @@ const server = createServer(async (req, res) => {
     return json(res, 200);
   }
   if (req.method === "GET" && path === "/api/plugin") return json(res, 200, { location: { directory: "x" }, data: [{ id: "opencode.core", source: { type: "builtin" }, features: {}, state: { status: "active" } }, { id: "my-plugin", source: { type: "npm", name: "my-plugin@1.0.0" }, features: {}, state: { status: "active" } }] });
+  if (req.method === "GET" && path === "/api/session/ses_1/form") return json(res, 200, { data: pendingForm ? [pendingForm] : [] });
+  const formRoute = /^\/api\/session\/ses_1\/form\/(frm_\w+)(\/reply)?$/.exec(path);
+  if (formRoute && req.method === "POST" && formRoute[2]) {
+    if (!pendingForm) return json(res, 404, { message: "no such form" });
+    emit("form.replied", { id: pendingForm.id, sessionID: "ses_1", answer: body.answer });
+    formResolve({ answer: body.answer });
+    return json(res, 200);
+  }
+  if (formRoute && req.method === "DELETE") {
+    if (!pendingForm) return json(res, 404, { message: "no such form" });
+    emit("form.cancelled", { id: pendingForm.id, sessionID: "ses_1" });
+    formResolve({ rejected: true, message: url.searchParams.get("message") ?? undefined });
+    return json(res, 200);
+  }
   if (req.method === "GET" && path === "/api/command") return json(res, 200, { location: { directory: "x" }, data: [{ name: "review", description: "Review the changes" }, { name: "init" }] });
   if (req.method === "GET" && path === "/api/skill") return json(res, 200, { location: { directory: "x" }, data: [{ id: "skl_pdf", name: "pdf", description: "Work with PDF files", path: "/x", content: "" }] });
   if (req.method === "POST" && path === "/api/session/ses_1/command") {

@@ -37,6 +37,7 @@ export const CAPABILITIES: readonly Capability[] = [
   { id: "commands", label: "/ palette: commands, skills and compaction", essential: false, routes: [r("GET", "/api/command"), r("GET", "/api/skill"), r("POST", "/api/session/{sessionID}/command"), r("POST", "/api/session/{sessionID}/compact")] },
   { id: "mcp", label: "MCP servers: list, add, switch on and off, remove", essential: false, routes: [r("GET", "/api/mcp"), r("PUT", "/api/experimental/mcp/{server}"), r("DELETE", "/api/experimental/mcp/{server}"), r("POST", "/api/experimental/mcp/{server}/connect"), r("POST", "/api/experimental/mcp/{server}/disconnect")] },
   { id: "plugins", label: "Plugins list", essential: false, routes: [r("GET", "/api/plugin")] },
+  { id: "questions", label: "The agent's questions (forms): list, answer, decline", essential: false, routes: [r("GET", "/api/session/{sessionID}/form"), r("POST", "/api/session/{sessionID}/form/{formID}/reply"), r("DELETE", "/api/session/{sessionID}/form/{formID}")] },
   { id: "accounts", label: "Accounts: connect a provider by key or browser sign-in, sign out", essential: false, routes: [r("GET", "/api/integration"), r("POST", "/api/integration/{integrationID}/connect/key"), r("POST", "/api/integration/{integrationID}/connect/oauth"), r("GET", "/api/integration/{integrationID}/connect/oauth/{attemptID}"), r("POST", "/api/integration/{integrationID}/connect/oauth/{attemptID}/complete"), r("DELETE", "/api/integration/{integrationID}/connect/oauth/{attemptID}"), r("GET", "/api/credential"), r("DELETE", "/api/credential/{credentialID}"), r("POST", "/api/credential/{credentialID}/activate")] },
 ];
 
@@ -59,6 +60,7 @@ export const CAPABILITIES_V1: readonly Capability[] = [
   { id: "commands", label: "/ palette: commands, skills and compaction", essential: false, routes: [r("GET", "/command"), r("POST", "/session/{sessionID}/command"), r("POST", "/session/{sessionID}/summarize")] },
   { id: "mcp", label: "MCP servers: list, add, switch on and off", essential: false, routes: [r("GET", "/mcp"), r("POST", "/mcp"), r("POST", "/mcp/{name}/connect"), r("POST", "/mcp/{name}/disconnect")] },
   { id: "skills", label: "Skills list", essential: false, routes: [r("GET", "/skill")] },
+  { id: "questions", label: "The agent's questions: list, answer, decline", essential: false, routes: [r("GET", "/question"), r("POST", "/question/{requestID}/reply"), r("POST", "/question/{requestID}/reject")] },
   { id: "accounts", label: "Accounts: connect a provider by key, sign out", essential: false, routes: [r("GET", "/provider"), r("PUT", "/auth/{providerID}"), r("DELETE", "/auth/{providerID}")] },
 ];
 

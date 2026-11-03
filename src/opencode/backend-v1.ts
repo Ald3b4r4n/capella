@@ -1,7 +1,8 @@
 import type { AccountInfo, Backend, McpConfig, McpServerInfo, McpStatus, ModelRef, PendingApproval, OauthAttempt, OauthStatus, PluginInfo, PromptFile, PromptOptions, SkillInfo, SlashEntry } from "./backend.ts";
 import type { OpencodeClient } from "./client.ts";
-import { familyOf, type MapResult, type ModelInfo } from "./events.ts";
-import { V1EventMapper } from "./events-v1.ts";
+import { familyOf, type MapResult, type ModelInfo, type QuestionRequest, type QuestionValue } from "./events.ts";
+import { mapQuestionRequest, V1EventMapper } from "./events-v1.ts";
+import { pathId } from "./backend-v2.ts";
 import { mapSessionRowsV1, replayItemsV1, type ReplayItem, type SessionRow } from "./history.ts";
 import { modeById, v1Rules, type Extras, type ModeId, type WebPolicy } from "./modes.ts";
 import type { UsageSnapshot } from "./usage.ts";
@@ -143,6 +144,25 @@ export class BackendV1 implements Backend {
     const parts = files.map((f) => ({ type: "file", mime: mimeFor(f), url: f.uri, filename: f.name }));
     // The legacy route answers when the command has finished; the turn itself streams as events, so it is not awaited.
     void this.client.request("POST", `/session/${sessionId}/command`, { body: { command: name, arguments: args, model: `${this.model.providerId}/${this.model.modelId}`, agent: this.agent, ...(this.effort ? { variant: this.effort } : {}), ...(parts.length > 0 ? { parts } : {}) }, timeoutMs: 10 * 60 * 1000 }).catch(() => undefined);
+  }
+
+  async questions(sessionId: string): Promise<QuestionRequest[]> {
+    const rows = await this.client.get<unknown[]>("/question");
+    return (Array.isArray(rows) ? rows : []).flatMap((row) => {
+      const request = mapQuestionRequest(row);
+      return request && request.sessionId === sessionId ? [request] : [];
+    });
+  }
+
+  async answerQuestion(_sessionId: string, requestId: string, answers: Record<string, QuestionValue>): Promise<void> {
+    // 1.x takes one list of chosen labels for each question, in order: `q0`, `q1`…
+    const count = Math.max(-1, ...Object.keys(answers).flatMap((k) => (/^q\d+$/.test(k) ? [Number(k.slice(1))] : []))) + 1;
+    const list = (v: QuestionValue | undefined): string[] => (Array.isArray(v) ? v : v === undefined || v === "" ? [] : [String(v)]);
+    await this.client.post(`/question/${pathId(requestId)}/reply`, { answers: Array.from({ length: count }, (_, i) => list(answers[`q${i}`])) });
+  }
+
+  async rejectQuestion(_sessionId: string, requestId: string): Promise<void> {
+    await this.client.post(`/question/${pathId(requestId)}/reject`, {});
   }
 
   async accounts(): Promise<AccountInfo[]> {

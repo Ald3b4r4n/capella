@@ -967,6 +967,44 @@ try {
     await shot("19-attachments-answer");
   }
 
+  // The agent asks the user a question (its question tool): the card shows the choices, the answer goes back, and the
+  // agent continues with it; declining ends the wait. Done with the editor's real page and a real model.
+  if (!V1) {
+    const questionAsk = "Use your tool for asking the user a question (not plain text) to ask me which colour I prefer, with the choices Red and Blue, then wait for my answer and tell me what I picked.";
+    const sendText = (text) => evalWeb(`(() => { const i = d.getElementById('input'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new Event('input')); d.getElementById('send').click(); return true; })()`);
+    const openCard = () => waitFor("the question card", () => evalWeb("(() => { const c = [...d.querySelectorAll('.question-card:not(.resolved)')].pop(); return c ? { title: c.querySelector('.what').textContent, options: [...c.querySelectorAll('.opt')].map(o => o.textContent), custom: !!c.querySelector('input[type=text]'), send: c.querySelector('.btn.allow').disabled } : null; })()"), 120000);
+    await sendText(questionAsk);
+    const card = await openCard();
+    console.log("question card:", JSON.stringify(card));
+    check("the agent's question shows as a card with its options and a box for an answer of one's own", /Red/.test(card.options.join(" ")) && /Blue/.test(card.options.join(" ")) && card.custom, JSON.stringify(card));
+    await shot("45-agent-question");
+    await evalWeb("(() => { const c = [...d.querySelectorAll('.question-card:not(.resolved)')].pop(); [...c.querySelectorAll('.opt')].find(o => /Blue/.test(o.textContent)).click(); return true; })()");
+    check("choosing an option enables Send answer", await evalWeb("!([...d.querySelectorAll('.question-card:not(.resolved)')].pop().querySelector('.btn.allow').disabled)"));
+    await evalWeb("(() => { [...d.querySelectorAll('.question-card:not(.resolved)')].pop().querySelector('.btn.allow').click(); return true; })()");
+    await waitFor("the answer to be taken", () => evalWeb("[...d.querySelectorAll('.question-card .verdict')].some(v => /You answered/.test(v.textContent))"), 60000);
+    await waitFor("the turn to end", () => evalWeb("!d.getElementById('stop').offsetParent && !d.querySelector('.turn.live')"), 120000);
+    const picked = await evalWeb("[...[...d.querySelectorAll('.turn')].pop().querySelectorAll('.md')].map(x => x.textContent).join(' ')");
+    console.log("answer after the question:", JSON.stringify(picked));
+    check("the card says what was answered and the agent continued with it", /blue/i.test(picked) && (await evalWeb("[...d.querySelectorAll('.question-card .verdict')].some(v => /You answered: .*Blue/.test(v.textContent))")), picked);
+    await shot("46-agent-question-answered");
+
+    await sendText(questionAsk);
+    await openCard();
+    await evalWeb("(() => { [...d.querySelectorAll('.question-card:not(.resolved)')].pop().querySelector('.btn.reject').click(); return true; })()");
+    const declinedCard = await waitFor("the decline to be taken", () => evalWeb("[...d.querySelectorAll('.question-card .verdict')].some(v => /chose not to answer/.test(v.textContent)) ? true : null"), 60000).catch(() => false);
+    check("declining is reported on the card", !!declinedCard);
+    // a model may ask again after being declined: answer that one so that the turn can end
+    const endBy = Date.now() + 120000;
+    while (Date.now() < endBy && !(await evalWeb("!d.getElementById('stop').offsetParent && !d.querySelector('.turn.live')"))) {
+      const more = await evalWeb("!!d.querySelector('.question-card:not(.resolved)')");
+      if (more) {
+        await evalWeb("(() => { const c = [...d.querySelectorAll('.question-card:not(.resolved)')].pop(); c.querySelector('.opt').click(); c.querySelector('.btn.allow').click(); return true; })()");
+      }
+      await sleep(1000);
+    }
+    check("after declining the turn ends instead of waiting", await evalWeb("!d.getElementById('stop').offsetParent && !d.querySelector('.turn.live')"));
+  }
+
   await paletteChecks();
   await toolsChecks();
 

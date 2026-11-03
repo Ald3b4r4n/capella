@@ -246,3 +246,15 @@ textarea::placeholder { color: color-mix(in srgb, var(--fg) 58%, var(--bg)); opa
 .session-actions { flex-wrap: wrap; justify-content: flex-end; }
 .tool-images { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 2px 0; }
 .tool-images .answer-pic { max-height: 220px; margin: 0; }
+
+/* ---- a question of the agent ---- */
+.question-card .q-fields { display: flex; flex-direction: column; gap: 12px; margin: 6px 0 8px; }
+.question-card .q-title { font-weight: 600; margin-bottom: 2px; }
+.question-card .opt { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; width: 100%; text-align: left; margin: 3px 0; padding: 6px 10px; border: 1px solid var(--edge); border-radius: 8px; background: color-mix(in srgb, var(--fg) 4%, transparent); color: inherit; }
+.question-card .opt:hover { border-color: color-mix(in srgb, var(--fg) 62%, var(--bg)); }
+.question-card .opt.on { border-color: var(--gold); background: var(--gold-soft); }
+.question-card .opt .mark { color: var(--gold); }
+.question-card .opt small { flex-basis: 100%; padding-left: 22px; }
+.question-card input[type="text"], .question-card input[type="number"], .question-card textarea { width: 100%; margin-top: 4px; background: var(--surface); color: inherit; border: 1px solid var(--edge); border-radius: 8px; padding: 5px 10px; font: inherit; }
+.question-card input:focus, .question-card textarea:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-soft); }
+.question-card button:disabled, .question-card input:disabled, .question-card textarea:disabled { opacity: 0.6; cursor: default; }

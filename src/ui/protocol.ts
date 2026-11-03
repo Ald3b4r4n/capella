@@ -171,6 +171,9 @@ export type FromWebview =
   | { type: "mcpTest"; name: string }
   | { type: "mcpSignIn"; name: string }
   | { type: "openSkill"; name: string }
+  /** The user's answer to a question of the agent, keyed by the fields of the request. */
+  | { type: "answerQuestion"; requestId: string; answers: Record<string, string | number | boolean | string[]> }
+  | { type: "rejectQuestion"; requestId: string }
   /** `method`: "key", or the id of one of the provider's browser sign-ins. */
   | { type: "accountConnect"; id: string; method: string }
   | { type: "accountDisconnect"; id: string; connectionId?: string }

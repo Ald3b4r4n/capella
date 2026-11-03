@@ -4,7 +4,7 @@ import { BackendV1 } from "./backend-v1.ts";
 import { BackendV2 } from "./backend-v2.ts";
 import { EventStream, OpencodeClient } from "./client.ts";
 import { assess, type Compatibility, type Tested } from "./compat.ts";
-import type { ChatEvent, ModelInfo } from "./events.ts";
+import type { ChatEvent, ModelInfo, QuestionValue } from "./events.ts";
 import type { ReplayItem, SessionRow } from "./history.ts";
 import { DEFAULT_MODE, modeById, type ModeId, type WebPolicy } from "./modes.ts";
 import { OpencodeServer, type OpencodeServerOptions } from "./server.ts";
@@ -196,6 +196,10 @@ export class OpencodeSession extends EventEmitter {
         if (this.announced.has(event.requestId)) continue;
         this.announced.add(event.requestId);
       }
+      if (event.type === "question-asked") {
+        if (this.announced.has(event.request.requestId)) continue;
+        this.announced.add(event.request.requestId);
+      }
       this.emit("event", event satisfies SessionEvent);
     }
   }
@@ -206,9 +210,14 @@ export class OpencodeSession extends EventEmitter {
     await this.surfacePendingApprovals();
   }
 
-  /** Raises approvals that are pending on the host but were never seen on the stream. */
+  /** Raises approvals and questions that are pending on the host but were never seen on the stream. */
   async surfacePendingApprovals(): Promise<void> {
     if (!this.sessionId || !this.backend) return;
+    for (const request of await this.backend.questions(this.sessionId).catch(() => [])) {
+      if (this.announced.has(request.requestId)) continue;
+      this.announced.add(request.requestId);
+      this.emit("event", { type: "question-asked", sessionId: this.sessionId, request } satisfies SessionEvent);
+    }
     for (const row of await this.backend.pending()) {
       if (row.sessionId !== this.sessionId || this.announced.has(row.id)) continue;
       this.announced.add(row.id);
@@ -365,6 +374,17 @@ export class OpencodeSession extends EventEmitter {
   async interrupt(): Promise<void> {
     if (!this.sessionId) return;
     await this.requireBackend().interrupt(this.sessionId);
+  }
+
+  /** Relays the user's answer to a question of the agent. Only ever called for what the user typed or chose. */
+  async answerQuestion(requestId: string, answers: Record<string, QuestionValue>): Promise<void> {
+    if (!this.sessionId) throw new Error("no session");
+    await this.requireBackend().answerQuestion(this.sessionId, requestId, answers);
+  }
+
+  async rejectQuestion(requestId: string, message?: string): Promise<void> {
+    if (!this.sessionId) throw new Error("no session");
+    await this.requireBackend().rejectQuestion(this.sessionId, requestId, message);
   }
 
   /** Relays the user's pick for one approval. `always` remembers the host's own suggested patterns. */

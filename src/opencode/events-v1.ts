@@ -8,14 +8,30 @@
  * this mapper keeps a little state: which messages are the user's, which part is text or reasoning, and what text a part
  * has shown so far.
  */
-import { mapTurnError, type ChatEvent, type MapResult, type TurnError } from "./events.ts";
+import { mapTurnError, type ChatEvent, type MapResult, type QuestionField, type QuestionRequest, type TurnError } from "./events.ts";
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 
 /** Frames that are state chatter a chat never shows. */
-const CHATTER = /^(server\.|plugin\.|catalog\.|integration\.|reference\.|project\.|vcs\.|lsp\.|file\.|installation\.|mcp\.|models-dev\.|global\.|pty\.|command\.|todo\.|tui\.|workspace\.|worktree\.|sync\.|question\.|session\.(created|updated|deleted|diff|compacted|status)|message\.(removed|part\.removed))/;
+const CHATTER = /^(server\.|plugin\.|catalog\.|integration\.|reference\.|project\.|vcs\.|lsp\.|file\.|installation\.|mcp\.|models-dev\.|global\.|pty\.|command\.|todo\.|tui\.|workspace\.|worktree\.|sync\.|session\.(created|updated|deleted|diff|compacted|status)|message\.(removed|part\.removed))/;
+
+/**
+ * A 1.x question request: every question becomes a field named `q0`, `q1`…, a choice (or several when `multiple`) with its
+ * options. 1.x lets the user type their own answer unless `custom` is false.
+ */
+export function mapQuestionRequest(raw: unknown): QuestionRequest | undefined {
+  if (!isRecord(raw) || typeof raw.id !== "string" || typeof raw.sessionID !== "string" || !Array.isArray(raw.questions)) return undefined;
+  const fields: QuestionField[] = [];
+  raw.questions.forEach((q, i) => {
+    if (!isRecord(q) || typeof q.question !== "string") return;
+    const options = Array.isArray(q.options) ? q.options.flatMap((o) => (isRecord(o) && typeof o.label === "string" ? [{ value: o.label, label: o.label, description: typeof o.description === "string" ? o.description : undefined }] : [])) : [];
+    const kind: QuestionField["kind"] = options.length === 0 ? "text" : q.multiple === true ? "multi" : "choice";
+    fields.push({ key: `q${i}`, title: typeof q.header === "string" && q.header !== "" ? q.header : q.question, description: typeof q.header === "string" && q.header !== "" ? q.question : undefined, kind, options: options.length > 0 ? options : undefined, custom: q.custom === false ? undefined : true, required: true });
+  });
+  return fields.length > 0 ? { requestId: raw.id, sessionId: raw.sessionID, title: "The agent has a question", fields } : undefined;
+}
 
 export function mapV1Error(value: unknown): TurnError | undefined {
   if (!isRecord(value)) return undefined;
@@ -82,6 +98,17 @@ export class V1EventMapper {
           }
         }
         return out.length > 0 ? out : [{ kind: "ignored" }];
+      }
+      case "question.asked": {
+        const request = mapQuestionRequest({ ...props });
+        return request ? [ev({ type: "question-asked", sessionId, request })] : [{ kind: "ignored" }];
+      }
+      case "question.replied":
+      case "question.rejected": {
+        const requestId = str(props.requestID);
+        if (!requestId) return [{ kind: "ignored" }];
+        const answers = Array.isArray(props.answers) ? Object.fromEntries(props.answers.map((a, i) => [`q${i}`, Array.isArray(a) ? a.filter((x): x is string => typeof x === "string") : []])) : undefined;
+        return [ev({ type: "question-resolved", sessionId, requestId, outcome: type === "question.replied" ? "answered" : "rejected", answers })];
       }
       case "session.idle":
         this.busy = false;

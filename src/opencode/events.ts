@@ -24,6 +24,40 @@ export interface TurnError {
   retryAfterMs?: number;
 }
 
+/** One answer: text, a number, a yes or no, or the options chosen. */
+export type QuestionValue = string | number | boolean | string[];
+
+/**
+ * One thing the agent asks. 2.x calls the whole request a "form" and 1.x a "question"; both are turned into this: a choice
+ * (one option, or free text when `custom`), several options, text, a number, a yes or no, or a link to open.
+ */
+export interface QuestionField {
+  key: string;
+  title: string;
+  description?: string;
+  kind: "text" | "number" | "integer" | "boolean" | "choice" | "multi" | "link";
+  options?: Array<{ value: string; label: string; description?: string }>;
+  /** A choice or several: the user may also type something that is not among the options. */
+  custom?: boolean;
+  required?: boolean;
+  /** Not shown to the user (2.x forms can hold fixed fields). */
+  hidden?: boolean;
+  /** Shown only while another field has (`eq`) or does not have (`neq`) a value. */
+  when?: Array<{ key: string; op: "eq" | "neq"; value: string | number | boolean }>;
+  default?: QuestionValue;
+  min?: number;
+  max?: number;
+  /** `link`: the address (https only). */
+  url?: string;
+}
+
+export interface QuestionRequest {
+  requestId: string;
+  sessionId: string;
+  title: string;
+  fields: QuestionField[];
+}
+
 export type ChatEvent =
   | { type: "turn-started"; sessionId: string }
   | { type: "step-started"; sessionId: string; messageId: string; agent?: string; model?: { id: string; providerId: string } }
@@ -41,6 +75,9 @@ export type ChatEvent =
   | { type: "approval-requested"; sessionId: string; requestId: string; action: string; resources: string[]; /** Patterns an "always" answer would remember. */ saves: string[]; source?: { messageId: string; callId: string } }
   | { type: "approval-resolved"; sessionId: string; requestId: string; reply: string }
   | { type: "step-ended"; sessionId: string; messageId: string; finish: string; tokens?: TokenUsage }
+  /** The agent is asking the user something and waits for the answer (the turn does not go on without it). */
+  | { type: "question-asked"; sessionId: string; request: QuestionRequest }
+  | { type: "question-resolved"; sessionId: string; requestId: string; outcome: "answered" | "rejected"; answers?: Record<string, QuestionValue> }
   /** A message that was waiting in the queue has just been taken into the turn. */
   | { type: "inbox-delivered"; sessionId: string; inboxId: string }
   | { type: "turn-ended"; sessionId: string; outcome: "succeeded" | "failed" | "interrupted" | "other"; error?: TurnError };
@@ -127,9 +164,58 @@ export function mapTurnError(value: unknown): TurnError | undefined {
   return { type: str(value.type) ?? "unknown", message, status, rateLimited, retryAfterMs: rateLimited ? parseRetryAfter(text) : undefined };
 }
 
+const FIELD_KINDS = new Set(["string", "number", "integer", "boolean", "multiselect", "external"]);
+
+/** A 2.x form as the questions of the chat. Fields it does not understand are dropped, never guessed. */
+export function mapForm(raw: unknown): QuestionRequest | undefined {
+  if (!isRecord(raw) || typeof raw.id !== "string" || typeof raw.sessionID !== "string" || !Array.isArray(raw.fields)) return undefined;
+  const fields: QuestionField[] = [];
+  for (const f of raw.fields) {
+    if (!isRecord(f) || typeof f.key !== "string" || typeof f.type !== "string" || !FIELD_KINDS.has(f.type)) continue;
+    const options = Array.isArray(f.options)
+      ? f.options.flatMap((o): Array<{ value: string; label: string; description?: string }> => (isRecord(o) && typeof o.value === "string" ? [{ value: o.value, label: typeof o.label === "string" ? o.label : o.value, description: typeof o.description === "string" ? o.description : undefined }] : []))
+      : undefined;
+    const when = Array.isArray(f.when)
+      ? f.when.flatMap((w): Array<{ key: string; op: "eq" | "neq"; value: string | number | boolean }> => (isRecord(w) && typeof w.key === "string" && (w.op === "eq" || w.op === "neq") && (typeof w.value === "string" || typeof w.value === "number" || typeof w.value === "boolean") ? [{ key: w.key, op: w.op, value: w.value }] : []))
+      : undefined;
+    let kind: QuestionField["kind"];
+    if (f.type === "multiselect") kind = "multi";
+    else if (f.type === "external") kind = "link";
+    else if (f.type === "string") kind = options && options.length > 0 ? "choice" : "text";
+    else kind = f.type as "number" | "integer" | "boolean";
+    const def = f.default;
+    fields.push({
+      key: f.key,
+      title: typeof f.title === "string" ? f.title : f.key,
+      description: typeof f.description === "string" ? f.description : undefined,
+      kind,
+      options: options && options.length > 0 ? options : undefined,
+      custom: f.custom === true ? true : undefined,
+      required: f.required === true ? true : undefined,
+      hidden: f.hidden === true ? true : undefined,
+      when: when && when.length > 0 ? when : undefined,
+      default: typeof def === "string" || typeof def === "number" || typeof def === "boolean" ? def : Array.isArray(def) ? def.filter((x): x is string => typeof x === "string") : undefined,
+      min: typeof f.minimum === "number" ? f.minimum : typeof f.minItems === "number" ? f.minItems : undefined,
+      max: typeof f.maximum === "number" ? f.maximum : typeof f.maxItems === "number" ? f.maxItems : undefined,
+      url: f.type === "external" && typeof f.url === "string" ? f.url : undefined,
+    });
+  }
+  if (fields.length === 0) return undefined;
+  return { requestId: raw.id, sessionId: raw.sessionID, title: typeof raw.title === "string" && raw.title !== "" ? raw.title : "The agent has a question", fields };
+}
+
 /** Maps one frame. `sessionId` filters to one chat; frames of other sessions are `ignored`. */
 export function mapFrame(frame: Frame, sessionId: string): MapResult {
   const d = frame.data;
+  if (frame.type === "form.created") {
+    const request = mapForm(d.form);
+    return request && request.sessionId === sessionId ? { kind: "event", event: { type: "question-asked", sessionId, request } } : { kind: "ignored" };
+  }
+  if ((frame.type === "form.replied" || frame.type === "form.cancelled") && str(d.sessionID) === sessionId && typeof d.id === "string") {
+    const answers = isRecord(d.answer) ? (d.answer as Record<string, QuestionValue>) : undefined;
+    return { kind: "event", event: { type: "question-resolved", sessionId, requestId: d.id, outcome: frame.type === "form.replied" ? "answered" : "rejected", answers } };
+  }
+  if (frame.type.startsWith("form.")) return { kind: "ignored" };
   const eventSession = str(d.sessionID);
   if (CHATTER.test(frame.type)) return { kind: "ignored" };
   if (frame.type === "permission.asked" || frame.type === "permission.replied") return mapPermission(frame, sessionId);
