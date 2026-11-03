@@ -115,8 +115,11 @@ export interface ToolsView {
   /** 1.x: no browser sign-in from here. */
   canOauth: boolean;
   mcp: McpRowView[];
-  skills: Array<{ name: string; description?: string; openable: boolean }>;
-  plugins: Array<{ source: string; state: string }>;
+  /** `managed`: installed from Capella, so it can be removed here. */
+  skills: Array<{ name: string; description?: string; openable: boolean; managed: boolean }>;
+  plugins: Array<{ name: string; kind: string; version?: string; outdated?: boolean; updating?: boolean; state: string; error?: string; removable: boolean }>;
+  /** 2.x: plugins can be checked, updated, added and removed from here. */
+  canManagePlugins: boolean;
   /** 1.x cannot forget a server: removing only disconnects it. */
   removeForgets: boolean;
 }
@@ -171,6 +174,12 @@ export type FromWebview =
   | { type: "mcpTest"; name: string }
   | { type: "mcpSignIn"; name: string }
   | { type: "openSkill"; name: string }
+  | { type: "pluginCheck" }
+  | { type: "pluginUpdate"; target: string }
+  | { type: "pluginAdd" }
+  | { type: "pluginRemove"; target: string }
+  | { type: "skillInstall" }
+  | { type: "skillRemove"; name: string }
   /** The user's answer to a question of the agent, keyed by the fields of the request. */
   | { type: "answerQuestion"; requestId: string; answers: Record<string, string | number | boolean | string[]> }
   | { type: "rejectQuestion"; requestId: string }

@@ -62,10 +62,19 @@ export interface SkillInfo {
   path?: string;
 }
 
+/** A plugin of this opencode, except opencode's own. `package` ones come from npm and can be updated; `local` ones are files. */
 export interface PluginInfo {
   id?: string;
-  source: string;
-  state: string;
+  kind: "package" | "local" | "sdk" | "config" | "unknown";
+  /** The npm package (`@scope/name`), the file's path, or the entry of the configuration. */
+  name: string;
+  version?: string;
+  /** A newer version exists (after a check). */
+  outdated?: boolean;
+  updating?: boolean;
+  state: "active" | "failed" | "configured" | "unknown";
+  /** Why it failed to load, trimmed. */
+  error?: string;
 }
 
 /** One question of a sign-in form (GitHub Copilot asks which GitHub it is, for instance). */
@@ -184,6 +193,10 @@ export interface Backend {
   mcpRemove(name: string): Promise<void>;
   skills(): Promise<SkillInfo[]>;
   plugins(): Promise<PluginInfo[]>;
+  /** Asks the registry which package plugins have a newer version (2.x only; a network call). */
+  pluginsCheck(): Promise<PluginInfo[]>;
+  /** Updates the named package plugins (2.x only). */
+  pluginsUpdate(targets: string[]): Promise<void>;
   interrupt(sessionId: string): Promise<void>;
   reply(sessionId: string, requestId: string, decision: "once" | "always" | "reject", message?: string): Promise<void>;
   pending(): Promise<PendingApproval[]>;

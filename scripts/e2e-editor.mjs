@@ -7,9 +7,9 @@
 // ever approved, no file is written and no command runs.
 //
 // Usage: node scripts/e2e-editor.mjs <path-to-editor-exe> [label] [providerID/modelID]
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -67,14 +67,21 @@ if (process.env.E2E_BROWSER) {
   goKey = real["opencode-go"]?.key;
   if (typeof goKey !== "string") throw new Error("no opencode-go key in auth.json");
 }
-const childEnv = { ...process.env, CAPELLA_TRACE_FILE: traceFile, CAPELLA_DEV_ADD_FOLDER: libFolder };
+// "Install a skill" also opens the system's folder picker: a development host takes the folder from here (the questions are asked all the same).
+const skillSource = join(work, "skill-src", "e2e-skill");
+mkdirSync(join(skillSource, "scripts"), { recursive: true });
+writeFileSync(join(skillSource, "SKILL.md"), "---\nname: e2e-skill\ndescription: Installed by the Capella e2e.\n---\nSay E2E.\n");
+writeFileSync(join(skillSource, "scripts", "run.py"), "print('e2e')\n");
+const childEnv = { ...process.env, CAPELLA_TRACE_FILE: traceFile, CAPELLA_DEV_ADD_FOLDER: libFolder, CAPELLA_DEV_SKILL_FOLDER: skillSource };
 // E2E_ACCOUNTS connects and signs out a DUMMY key, and E2E_TOOLS adds MCP servers with secrets and starts new chats: they run in a throwaway home (like 1.x), never in your own opencode, whose own MCP servers would also make every start slow.
-if (V1 || process.env.E2E_ACCOUNTS || process.env.E2E_TOOLS || process.env.E2E_BROWSER) {
+if (V1 || process.env.E2E_ACCOUNTS || process.env.E2E_TOOLS || process.env.E2E_BROWSER || process.env.E2E_EXTRAS) {
   const v1Home = join(work, "v1-home");
   Object.assign(childEnv, { HOME: v1Home, USERPROFILE: v1Home, XDG_CONFIG_HOME: join(v1Home, "c"), XDG_DATA_HOME: join(v1Home, "d"), XDG_STATE_HOME: join(v1Home, "s"), XDG_CACHE_HOME: join(v1Home, "k") });
   for (const name of Object.keys(childEnv)) if (/(_API_KEY|_TOKEN|_SECRET)$/i.test(name)) delete childEnv[name];
 }
 
+const startedAt = Date.now();
+if (process.env.E2E_EXTRAS) process.on("exit", () => execFileSync(process.execPath, [join(root, "scripts", "stop-services.mjs"), String(startedAt - 2000)], { stdio: "ignore" }));
 const child = spawn(
   exe,
   [workspace, `--user-data-dir=${userData}`, `--extensions-dir=${join(work, "extensions")}`, `--extensionDevelopmentPath=${root}`, `--remote-debugging-port=${port}`, "--disable-workspace-trust", "--skip-release-notes", "--skip-welcome", "--new-window"],
@@ -680,6 +687,97 @@ try {
       web.close();
     }
   };
+
+  // Plugins and skills: add, check, remove, install. A throwaway home only: the plugin goes into ITS global configuration.
+  const extrasChecks = async () => {
+    const configFile = join(work, "v1-home", "c", "opencode", "opencode.json");
+    const PKG = "@opencode-ai/plugin";
+    const open = async () => {
+      await evalWeb("(() => { d.getElementById('toolsBtn').click(); return true; })()");
+      await waitFor("the Tools panel", () => evalWeb("!d.getElementById('tools').hidden && !!d.querySelector('#toolsBody .tools-section')"), 30000);
+      await sleep(1000);
+    };
+    const btn = (label) => `(() => { [...d.querySelectorAll('#toolsBody .btn')].find(b => b.textContent === ${JSON.stringify(label)}).click(); return true; })()`;
+    const section = (title) => `[...d.querySelectorAll('#toolsBody .tools-section')].find(x => /^${title}/.test(x.querySelector('h3').textContent))`;
+    await open();
+
+    // a plugin: the question first (Cancel adds nothing), then the install through the official command
+    await evalWeb(btn("Add a plugin\u2026"));
+    await inputBox(PKG);
+    const q1 = await waitFor("the question", dialogText, 30000).catch(() => null);
+    console.log("plugin question:", JSON.stringify(q1));
+    check("adding a plugin asks first: the package, that it is third-party code, that the global configuration changes", !!q1 && q1.includes(PKG) && /GLOBAL opencode configuration/.test(q1) && /runs inside opencode with your permissions/.test(q1) && /new chat/.test(q1), String(q1));
+    await shot("47-plugin-question");
+    await clickDialog("Cancel");
+    await sleep(1500);
+    check("Cancel adds nothing", !existsSync(configFile) || !readFileSync(configFile, "utf8").includes(PKG));
+    await evalWeb(btn("Add a plugin\u2026"));
+    await inputBox(PKG);
+    await waitFor("the question again", dialogText, 30000);
+    await clickDialog("Install and add");
+    const added = await waitFor("the plugin in the configuration", async () => (existsSync(configFile) && readFileSync(configFile, "utf8").includes(PKG) ? true : null), 240000).catch(() => false);
+    check("after the question the official command installs it and adds it to the (throwaway) global configuration", !!added);
+    const addedNotice = await waitFor("the notice", () => evalWeb("(() => { const n = d.getElementById('notice').textContent; return /was installed and added/.test(n) ? n : null; })()"), 60000).catch(() => null);
+    check("and the chat says it was added and that a new chat loads it", !!addedNotice && /new chat/.test(addedNotice), String(addedNotice));
+
+    // a new chat starts a new opencode, which loads it (and says why it cannot: this package is not a plugin)
+    await evalWeb("(() => { d.getElementById('toolsClose').click(); d.getElementById('newChat').click(); return true; })()");
+    await sleep(1500);
+    await waitFor("the new chat to be ready", () => evalWeb("/^opencode \\d/.test(d.getElementById('version').textContent)"), 60000);
+    await open();
+    const row = await waitFor("the plugin row", async () => { await evalWeb("(() => { d.getElementById('toolsRefresh').click(); return true; })()"); await sleep(4000); return evalWeb(`(() => { const s = ${section("Plugins")}; const r = s && [...s.querySelectorAll('.session')].find(r => r.querySelector('.session-title').textContent.startsWith(${JSON.stringify(PKG)})); return r ? { meta: r.querySelector('.session-meta').textContent, badge: r.querySelector('.badge').textContent, error: (r.querySelector('.error-text') || {}).textContent || '', buttons: [...r.querySelectorAll('.btn')].map(b => b.textContent) } : null; })()`); }, 180000).catch(() => null);
+    console.log("plugin row:", JSON.stringify(row));
+    check("the plugin is listed as an npm package, with why it did not load, and can be removed", !!row && /npm package/.test(row.meta) && row.badge === "failed" && /default definition/.test(row.error) && row.buttons.includes("Remove"), JSON.stringify(row));
+    await shot("48-plugin-listed");
+    await evalWeb(btn("Check for updates"));
+    const checked = await waitFor("the check result", () => evalWeb("(() => { const n = d.getElementById('notice').textContent; return /up to date|Newer versions|no package plugins/i.test(n) ? n : null; })()"), 90000).catch(() => null);
+    check("Check for updates answers in words", !!checked, String(checked));
+    await evalWeb(`(() => { const s = ${section("Plugins")}; [...s.querySelectorAll('.session')].find(r => r.querySelector('.session-title').textContent.startsWith(${JSON.stringify(PKG)})).querySelector('.btn').click(); return true; })()`);
+    const q2 = await waitFor("the remove question", dialogText, 30000).catch(() => null);
+    check("removing asks first and says where it is removed from", !!q2 && /Remove the plugin/.test(q2) && /GLOBAL opencode configuration/.test(q2), String(q2));
+    await clickDialog("Remove");
+    const removed = await waitFor("the plugin out of the configuration", async () => (existsSync(configFile) && !readFileSync(configFile, "utf8").includes(PKG) ? true : null), 120000).catch(() => false);
+    check("the official command takes it out of the configuration", !!removed);
+
+    // a skill: the folder comes from the test (the system's picker cannot be driven), the questions are real
+    await evalWeb("(() => { d.getElementById('toolsRefresh').click(); return true; })()");
+    await sleep(1500);
+    await evalWeb(btn("Install a skill from a folder\u2026"));
+    await inputBox(); // where: the first choice, this project
+    const q3 = await waitFor("the install question", dialogText, 30000).catch(() => null);
+    console.log("skill question:", JSON.stringify(q3));
+    check("installing a skill asks first: its name and description, how many files, the programs it carries, where it goes", !!q3 && /e2e-skill: Installed by the Capella e2e/.test(q3) && /2 files/.test(q3) && /scripts\/run\.py/.test(q3) && /\.opencode/.test(q3) && /source you trust/.test(q3), String(q3));
+    await shot("49-skill-question");
+    await clickDialog("Cancel");
+    await sleep(800);
+    check("Cancel installs nothing", !existsSync(join(workspace, ".opencode", "skills", "e2e-skill")));
+    await evalWeb(btn("Install a skill from a folder\u2026"));
+    await inputBox();
+    await waitFor("the install question again", dialogText, 30000);
+    await clickDialog("Install skill");
+    check("the skill folder was copied into the project", existsSync(join(workspace, ".opencode", "skills", "e2e-skill", "SKILL.md")) && existsSync(join(workspace, ".opencode", "skills", "e2e-skill", "scripts", "run.py")));
+    const skillRow = await waitFor("the skill in the list", async () => {
+      await evalWeb("(() => { d.getElementById('toolsRefresh').click(); return true; })()");
+      await sleep(3000);
+      return evalWeb(`(() => { const s = ${section("Skills")}; const r = s && [...s.querySelectorAll('.session')].find(r => r.querySelector('.session-title').textContent === 'e2e-skill'); return r ? { badge: (r.querySelector('.badge') || {}).textContent, buttons: [...r.querySelectorAll('.btn')].map(b => b.textContent) } : null; })()`);
+    }, 120000).catch(() => null);
+    console.log("skill row:", JSON.stringify(skillRow));
+    check("opencode lists it, marked as installed in Capella, with Open and Remove", !!skillRow && skillRow.badge === "installed in Capella" && skillRow.buttons.includes("Remove") && skillRow.buttons.includes("Open"), JSON.stringify(skillRow));
+    await shot("50-skill-installed");
+    await evalWeb(`(() => { const s = ${section("Skills")}; [...s.querySelectorAll('.session')].find(r => r.querySelector('.session-title').textContent === 'e2e-skill').querySelectorAll('.btn').forEach(b => { if (b.textContent === 'Remove') b.click(); }); return true; })()`);
+    const q4 = await waitFor("the remove question", dialogText, 30000).catch(() => null);
+    check("removing a skill asks first, naming the folder", !!q4 && /Remove the skill "e2e-skill"/.test(q4), String(q4));
+    await clickDialog("Remove");
+    await sleep(1500);
+    check("the folder Capella installed is deleted", !existsSync(join(workspace, ".opencode", "skills", "e2e-skill")));
+    await evalWeb("(() => { d.getElementById('toolsClose').click(); return true; })()");
+  };
+
+  if (process.env.E2E_EXTRAS) {
+    await extrasChecks();
+    console.log(failed === 0 ? `[${label}] ALL CHECKS PASSED (extras)` : `[${label}] ${failed} CHECK(S) FAILED (extras)`);
+    throw Object.assign(new Error("extras run finished"), { v1Done: true });
+  }
 
   if (process.env.E2E_BROWSER) {
     await browserChecks();

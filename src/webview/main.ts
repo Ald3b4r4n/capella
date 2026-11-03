@@ -1157,31 +1157,73 @@ function paintTools(tools: ToolsView): void {
   browser.addEventListener("click", () => post({ type: "mcpAddBrowser" }));
   mcp.append(" ", browser);
 
-  const skills = toolsSection(`Skills (${tools.skills.length})`, "Type / in the message box to use one.");
+  const skills = toolsSection(`Skills (${tools.skills.length})`, "Type / in the message box to use one. A skill is a folder with a SKILL.md: install one from a folder you trust.");
   for (const skill of tools.skills) {
     const row = el("div", "session");
     const text = el("div", "session-text");
     text.append(el("div", "session-title", skill.name));
-    if (skill.description) text.append(el("div", "session-meta faint", skill.description.length > 160 ? skill.description.slice(0, 160) + "\u2026" : skill.description));
+    if (skill.description) text.append(el("div", "session-meta faint", skill.description.length > 160 ? skill.description.slice(0, 160) + "…" : skill.description));
     const actions = el("div", "session-actions");
+    if (skill.managed) actions.append(el("span", "badge connected", "installed in Capella"));
     if (skill.openable) {
       const open = el("button", "btn", "Open");
       open.type = "button";
       open.addEventListener("click", () => post({ type: "openSkill", name: skill.name }));
       actions.append(open);
     }
+    if (skill.managed) {
+      const remove = el("button", "btn", "Remove");
+      remove.type = "button";
+      remove.title = "Delete the folder Capella installed";
+      remove.addEventListener("click", () => post({ type: "skillRemove", name: skill.name }));
+      actions.append(remove);
+    }
     row.append(text, actions);
     skills.append(row);
   }
-  const plugins = toolsSection(`Plugins (${tools.plugins.length})`, "Plugins other than opencode's own. They come from your opencode configuration and are not changed here.");
+  const installSkill = el("button", "btn", "Install a skill from a folder…");
+  installSkill.type = "button";
+  installSkill.addEventListener("click", () => post({ type: "skillInstall" }));
+  skills.append(installSkill);
+
+  const plugins = toolsSection(`Plugins (${tools.plugins.length})`, tools.canManagePlugins ? "Plugins other than opencode's own. A plugin is code that runs inside opencode with your permissions: add only ones you trust. Adding and removing change your global opencode configuration." : "Plugins from your opencode configuration (listed only: managing them needs opencode 2.x).");
   for (const plugin of tools.plugins) {
     const row = el("div", "session");
     const text = el("div", "session-text");
-    text.append(el("div", "session-title", plugin.source), el("div", "session-meta faint", plugin.state));
-    row.append(text);
+    text.append(el("div", "session-title", plugin.version ? `${plugin.name} ${plugin.version}` : plugin.name), el("div", "session-meta faint", plugin.kind === "package" ? "npm package" : plugin.kind === "local" ? "local file" : plugin.kind === "config" ? "from your opencode configuration" : plugin.kind));
+    if (plugin.error) text.append(el("div", "session-meta error-text", plugin.error));
+    const actions = el("div", "session-actions");
+    actions.append(el("span", `badge ${plugin.state === "active" ? "connected" : plugin.state === "failed" ? "failed" : ""}`, plugin.updating ? "updating…" : plugin.state));
+    if (plugin.outdated) {
+      actions.append(el("span", "badge needs-auth", "update available"));
+      if (tools.canManagePlugins && plugin.kind === "package") {
+        const update = el("button", "btn", "Update");
+        update.type = "button";
+        update.addEventListener("click", () => post({ type: "pluginUpdate", target: plugin.name }));
+        actions.append(update);
+      }
+    }
+    if (tools.canManagePlugins && plugin.removable) {
+      const remove = el("button", "btn", "Remove");
+      remove.type = "button";
+      remove.title = "Take it out of your global opencode configuration";
+      remove.addEventListener("click", () => post({ type: "pluginRemove", target: plugin.name }));
+      actions.append(remove);
+    }
+    row.append(text, actions);
     plugins.append(row);
   }
   if (tools.plugins.length === 0) plugins.append(el("div", "faint pad", "No plugins besides opencode's own."));
+  if (tools.canManagePlugins) {
+    const check = el("button", "btn", "Check for updates");
+    check.type = "button";
+    check.title = "Asks the npm registry whether the package plugins have a newer version";
+    check.addEventListener("click", () => post({ type: "pluginCheck" }));
+    const addPlugin = el("button", "btn", "Add a plugin…");
+    addPlugin.type = "button";
+    addPlugin.addEventListener("click", () => post({ type: "pluginAdd" }));
+    plugins.append(check, " ", addPlugin);
+  }
 }
 
 function openTools(): void {

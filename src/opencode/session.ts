@@ -326,6 +326,14 @@ export class OpencodeSession extends EventEmitter {
     return this.requireBackend().skills().catch(() => []);
   }
 
+  async pluginsCheck(): Promise<PluginInfo[]> {
+    return this.requireBackend().pluginsCheck();
+  }
+
+  async pluginsUpdate(targets: string[]): Promise<void> {
+    await this.requireBackend().pluginsUpdate(targets);
+  }
+
   async plugins(): Promise<PluginInfo[]> {
     return this.requireBackend().plugins().catch(() => []);
   }

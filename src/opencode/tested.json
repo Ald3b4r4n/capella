@@ -32,6 +32,8 @@
     "POST /api/integration/{integrationID}/connect/key",
     "POST /api/integration/{integrationID}/connect/oauth",
     "POST /api/integration/{integrationID}/connect/oauth/{attemptID}/complete",
+    "POST /api/plugin/check",
+    "POST /api/plugin/update",
     "POST /api/session",
     "POST /api/session/{sessionID}/agent",
     "POST /api/session/{sessionID}/command",
@@ -44,5 +46,5 @@
     "POST /api/session/{sessionID}/prompt",
     "PUT /api/experimental/mcp/{server}"
   ],
-  "fingerprint": "38769d8ec40d"
+  "fingerprint": "c9bb135d1bd8"
 }

@@ -284,7 +284,8 @@ test("on 1.x: MCP servers are listed by name, added, switched off and 'removed' 
   await session.mcpRemove("probe");
   assert.equal((await session.mcpList()).find((s) => s.name === "probe")!.status, "disabled");
   assert.deepEqual((await session.skills()).map((s) => [s.name, s.path]), [["pdf", "/skills/pdf/SKILL.md"]]);
-  assert.deepEqual(await session.plugins(), [{ source: "config: some-plugin@1.2.3", state: "configured" }, { source: "config: other-plugin", state: "configured" }]);
+  assert.deepEqual((await session.plugins()).map((p) => [p.kind, p.name, p.state]), [["config", "some-plugin@1.2.3", "configured"], ["config", "other-plugin", "configured"]]);
+  await assert.rejects(session.pluginsCheck(), /needs opencode 2.x/);
 });
 
 test("on 1.x: providers come from /provider with the connected ones marked, a key is stored with PUT /auth and removed with DELETE, and a browser sign-in says to use the terminal", async () => {

@@ -38,6 +38,7 @@ const inbox = [];
 let pendingForm;
 let formResolve;
 let mcp = [{ name: "docs", status: { status: "connected" } }];
+let pluginsChecked = false;
 // Providers and their stored credentials. `GET /api/credential` carries the secrets themselves, like the real one.
 let credentials = [{ id: "cred_zen1", integrationID: "opencode", label: "Default", active: true, method: "oauth", value: { type: "oauth", access: "SECRET-ACCESS", refresh: "SECRET-REFRESH" } }];
 let oauthPolls = 0;
@@ -278,7 +279,15 @@ const server = createServer(async (req, res) => {
     for (const c of credentials) if (c.integrationID === target.integrationID) c.active = c.id === target.id;
     return json(res, 200);
   }
-  if (req.method === "GET" && path === "/api/plugin") return json(res, 200, { location: { directory: "x" }, data: [{ id: "opencode.core", source: { type: "builtin" }, features: {}, state: { status: "active" } }, { id: "my-plugin", source: { type: "npm", name: "my-plugin@1.0.0" }, features: {}, state: { status: "active" } }] });
+  if (req.method === "GET" && path === "/api/plugin") return json(res, 200, { location: { directory: "x" }, data: [{ id: "opencode.core", source: { type: "builtin" }, features: {}, state: { status: "active" } }, { id: "my-plugin", source: { type: "package", target: "my-plugin", version: "1.0.0", ...(pluginsChecked ? { outdated: true } : {}) }, features: {}, state: { status: "active" } }, { id: "broken-plugin", source: { type: "package", target: "broken-plugin" }, features: {}, state: { status: "failed", error: "Plugin must export a default definition" } }] });
+  if (req.method === "POST" && path === "/api/plugin/check") {
+    pluginsChecked = true;
+    return json(res, 200, { location: { directory: "x" }, data: [{ id: "my-plugin", source: { type: "package", target: "my-plugin", version: "1.0.0", outdated: true }, features: {}, state: { status: "active" } }] });
+  }
+  if (req.method === "POST" && path === "/api/plugin/update") {
+    pluginsChecked = false;
+    return json(res, 200);
+  }
   if (req.method === "GET" && path === "/api/session/ses_1/form") return json(res, 200, { data: pendingForm ? [pendingForm] : [] });
   const formRoute = /^\/api\/session\/ses_1\/form\/(frm_\w+)(\/reply)?$/.exec(path);
   if (formRoute && req.method === "POST" && formRoute[2]) {

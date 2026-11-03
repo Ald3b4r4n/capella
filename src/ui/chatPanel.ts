@@ -23,6 +23,7 @@ import { imagePathsIn } from "./browserPreset.ts";
 import { sanitizeAnswers } from "./questions.ts";
 import { validMcpName } from "./mcpInput.ts";
 import { McpManager } from "./mcpManager.ts";
+import { ExtrasManager } from "./extrasManager.ts";
 import { summarize } from "./mcpStore.ts";
 import type { Delivery, SlashEntry } from "../opencode/backend.ts";
 import type { UpdateMonitor } from "./updateMonitor.ts";
@@ -42,6 +43,7 @@ export class ChatPanel {
   private readonly panel: vscode.WebviewPanel;
   private readonly output: vscode.OutputChannel;
   private readonly mcp: McpManager;
+  private readonly extras: ExtrasManager;
   private readonly tracker: UsageTracker;
   private readonly context: vscode.ExtensionContext;
   private readonly updates: UpdateMonitor;
@@ -102,6 +104,7 @@ export class ChatPanel {
     this.panel = panel;
     this.updates = updates;
     this.output = output;
+    this.extras = new ExtrasManager(context, (text, error) => this.notice(text, error), (line) => output.appendLine(line), () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
     this.mcp = new McpManager(context, (text, error) => this.notice(text, error), (line) => output.appendLine(line), () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
     this.resetChanges();
     this.voice = new VoiceBridge(context, (m) => this.post(m));
@@ -223,7 +226,7 @@ export class ChatPanel {
     const mcp: McpRowView[] = servers.map((s) => ({ name: s.name, status: s.status, detail: s.detail, managed: stored.has(s.name), summary: stored.has(s.name) ? summarize(stored.get(s.name)!) : undefined, integrationId: s.integrationId }));
     const openable = await Promise.all(skills.map(async (s) => !!s.path && isAbsolute(s.path) && (await stat(s.path).then((i) => i.isFile()).catch(() => false))));
     const accounts = (await session.accounts().catch(() => [] as AccountInfo[])).map((a): AccountView => ({ id: a.id, name: a.name, featured: a.id === "opencode" || a.id === "opencode-go", canKey: a.key, oauth: a.oauth.map((o) => ({ id: o.id, label: o.label })), connections: a.connections }));
-    return { accounts, canOauth: session.generation === "v2", mcp, skills: skills.map((s, i) => ({ name: s.name, description: s.description, openable: openable[i]! })), plugins: plugins.map((p) => ({ source: p.source, state: p.state })), removeForgets: session.generation === "v2" };
+    return { accounts, canOauth: session.generation === "v2", mcp, skills: skills.map((s, i) => ({ name: s.name, description: s.description, openable: openable[i]!, managed: this.extras.installedSkills().some((x) => x.name === s.name) })), canManagePlugins: session.generation === "v2", plugins: plugins.map((p) => ({ name: p.name, kind: p.kind, version: p.version, outdated: p.outdated, updating: p.updating, state: p.state, error: p.error, removable: p.kind === "package" })), removeForgets: session.generation === "v2" };
   }
 
   private async postTools(): Promise<void> {
@@ -959,6 +962,44 @@ export class ChatPanel {
         }
         case "openSkill":
           await this.openSkill(message.name);
+          break;
+        case "pluginCheck":
+          if (this.session) {
+            await this.extras.checkPlugins(this.session);
+            await this.postTools();
+          }
+          break;
+        case "pluginUpdate":
+          if (this.session) {
+            await this.extras.updatePlugin(this.session, message.target);
+            await this.postTools();
+          }
+          break;
+        case "pluginAdd": {
+          const binary = locateOpencode(vscode.workspace.getConfiguration("capella").get<string>("opencodePath"));
+          if (binary && (await this.extras.addPlugin(binary))) await this.postTools();
+          else if (!binary) this.notice("opencode was not found.", true);
+          break;
+        }
+        case "pluginRemove": {
+          const binary = locateOpencode(vscode.workspace.getConfiguration("capella").get<string>("opencodePath"));
+          if (binary && (await this.extras.removePlugin(binary, message.target))) await this.postTools();
+          else if (!binary) this.notice("opencode was not found.", true);
+          break;
+        }
+        case "skillInstall": {
+          const session = await this.ensureSession();
+          if (session && (await this.extras.installSkill(session, session.generation === "v2"))) {
+            // opencode watches its skill folders: it lists the new one within a few seconds
+            for (const wait of [2500, 6000, 12000]) setTimeout(() => void this.postTools(), wait);
+          }
+          break;
+        }
+        case "skillRemove":
+          if (await this.extras.removeSkill(message.name)) {
+            for (const wait of [1000, 6000]) setTimeout(() => void this.postTools(), wait);
+            await this.postTools();
+          }
           break;
         case "answerQuestion": {
           if (!this.session) break;

@@ -236,8 +236,16 @@ export class BackendV1 implements Backend {
     const config = await this.client.get<{ plugin?: unknown }>("/config");
     return (Array.isArray(config?.plugin) ? config.plugin : []).flatMap((p): PluginInfo[] => {
       const spec = typeof p === "string" ? p : Array.isArray(p) && typeof p[0] === "string" ? p[0] : undefined;
-      return spec ? [{ source: `config: ${spec}`, state: "configured" }] : [];
+      return spec ? [{ kind: "config", name: spec, state: "configured" }] : [];
     });
+  }
+
+  async pluginsCheck(): Promise<PluginInfo[]> {
+    throw new Error("Checking plugins for updates needs opencode 2.x.");
+  }
+
+  async pluginsUpdate(): Promise<void> {
+    throw new Error("Updating plugins needs opencode 2.x.");
   }
 
   async compact(sessionId: string): Promise<void> {

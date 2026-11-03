@@ -341,7 +341,7 @@ test("skills and the plugins that are not built in", async () => {
   const { session } = make();
   await session.start();
   assert.deepEqual((await session.skills()).map((s) => s.name), ["pdf"]);
-  assert.deepEqual(await session.plugins(), [{ id: "my-plugin", source: "npm: my-plugin@1.0.0", state: "active" }]);
+  assert.deepEqual((await session.plugins()).map((p) => [p.kind, p.name, p.version, p.state, p.error]), [["package", "my-plugin", "1.0.0", "active", undefined], ["package", "broken-plugin", undefined, "failed", "Plugin must export a default definition"]]);
 });
 
 test("accounts: listed without any secret even though the credential route carries them; a key is connected, a credential made active, then signed out", async () => {

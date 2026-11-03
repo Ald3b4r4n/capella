@@ -199,13 +199,15 @@ export class BackendV2 implements Backend {
   }
 
   async plugins(): Promise<PluginInfo[]> {
-    const rows = await this.client.get<{ data?: Array<{ id?: unknown; source?: { type?: unknown; name?: unknown; spec?: unknown; path?: unknown }; state?: { status?: unknown } }> }>("/api/plugin");
-    return (rows?.data ?? []).flatMap((p): PluginInfo[] => {
-      const type = typeof p.source?.type === "string" ? p.source.type : "unknown";
-      if (type === "builtin") return [];
-      const where = [p.source?.name, p.source?.spec, p.source?.path].find((v): v is string => typeof v === "string");
-      return [{ id: typeof p.id === "string" ? p.id : undefined, source: where ? `${type}: ${where}` : type, state: typeof p.state?.status === "string" ? p.state.status : "unknown" }];
-    });
+    return mapPlugins(await this.client.get<{ data?: unknown[] }>("/api/plugin"));
+  }
+
+  async pluginsCheck(): Promise<PluginInfo[]> {
+    return mapPlugins(await this.client.post<{ data?: unknown[] }>("/api/plugin/check", {}, { timeoutMs: 120_000 }));
+  }
+
+  async pluginsUpdate(targets: string[]): Promise<void> {
+    await this.client.post("/api/plugin/update", { targets }, { timeoutMs: 180_000 });
   }
 
   async interrupt(sessionId: string): Promise<void> {
@@ -274,5 +276,35 @@ export function formOf(value: unknown): FormField[] {
     if (typeof row.key !== "string") return [];
     const options = Array.isArray(row.options) ? row.options.flatMap((o): Array<{ value: string; label: string }> => (typeof o === "object" && o !== null && typeof (o as { value?: unknown }).value === "string" ? [{ value: (o as { value: string }).value, label: typeof (o as { label?: unknown }).label === "string" ? (o as { label: string }).label : (o as { value: string }).value }] : [])) : undefined;
     return [{ key: row.key, title: typeof row.title === "string" ? row.title : row.key, required: row.required === true, options: options && options.length > 0 ? options : undefined, hidden: row.hidden === true, default: typeof row.default === "string" ? row.default : undefined }];
+  });
+}
+
+/**
+ * The plugins of `GET /api/plugin` (or of a check), without opencode's own. Observed on 2.2.5: `source` is `{type: "package",
+ * target, version?, outdated?, updating?}`, `{type: "local", path}`, `{type: "sdk"}` or `{type: "builtin"}`, and `state` is
+ * `{status: "active"}` or `{status: "failed", error}`.
+ */
+export function mapPlugins(rows: { data?: unknown[] } | undefined): PluginInfo[] {
+  const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+  return (rows?.data ?? []).flatMap((row): PluginInfo[] => {
+    if (!isRecord(row) || !isRecord(row.source)) return [];
+    const source = row.source;
+    if (source.type === "builtin") return [];
+    const state = isRecord(row.state) ? row.state : {};
+    const status = state.status === "active" || state.status === "failed" ? state.status : "unknown";
+    const kind: PluginInfo["kind"] = source.type === "package" || source.type === "local" || source.type === "sdk" ? source.type : "unknown";
+    const name = kind === "package" && typeof source.target === "string" ? source.target : kind === "local" && typeof source.path === "string" ? source.path : typeof row.id === "string" ? row.id : kind;
+    return [
+      {
+        id: typeof row.id === "string" ? row.id : undefined,
+        kind,
+        name,
+        version: typeof source.version === "string" ? source.version : undefined,
+        outdated: source.outdated === true ? true : undefined,
+        updating: source.updating === true ? true : undefined,
+        state: status,
+        error: typeof state.error === "string" ? state.error.replace(/\s+/g, " ").trim().slice(0, 300) : undefined,
+      },
+    ];
   });
 }
