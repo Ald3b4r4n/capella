@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.12 (unreleased)
+## 0.1.12 (2026-11-02)
 
 - **Approval cards say what they are about.** The card for an MCP tool (the browser, say) showed only "Allow browser_browser_navigate?" and a `*`. It now links the request to its tool call and shows, in words, `Calls the "browser_navigate" tool of the "browser" server` with the call and its arguments (`browser.browser_navigate({ url: "http://127.0.0.1:5173/" })`), and the code on demand; commands, edits and web fetches are stated plainly; other calls show `name: value` lines. The bare `*` is no longer repeated.
 - Checked against a real model driving the real browser server in both editors (every approval named its tool and, for the first, the address), and on the shell approval of the main flow.
