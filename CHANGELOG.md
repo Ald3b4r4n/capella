@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.11 (unreleased)
+## 0.1.11 (2026-11-02)
 
 - **Plugins:** the list now shows what opencode really says (the npm package and its version, why one failed to load, "update available"). **Check for updates**, **Update** (after a question), **Add a plugin…** and **Remove** (the official `opencode plugin add|remove`, after a question that says it is third-party code and that it changes the global configuration). npm package names only. 2.x only; 1.x lists them.
 - **Skills:** **Install a skill from a folder…** (inspected first: a `SKILL.md` with a valid name and description, no links, no `.git`, at most 200 files and 5 MB; the question lists its files and program-like files and where it goes) and **Remove** for what Capella installed.
