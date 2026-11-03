@@ -20,7 +20,7 @@ export function chatHtml(options: ChatHtmlOptions): string {
 <link rel="stylesheet" href="${escapeHtml(mediaUri("chat.css"))}">
 <title>Capella</title></head><body>
 <header class="top">
-  <div class="brand"><img src="${escapeHtml(mediaUri("capella.svg"))}" alt="" width="20" height="20"><span>Capella</span><span id="version" class="faint"></span></div>
+  <div class="brand"><img src="${escapeHtml(mediaUri("capella.svg"))}" alt="" width="20" height="20"><span>Capella</span><span id="version" class="faint"></span><span id="treeChip" class="badge connected" hidden title="This chat works in a worktree: a separate copy of the project, so your own files are left alone"></span></div>
   <div class="top-right">
     <span id="usage" class="usage" hidden></span>
     <button id="toolsBtn" class="ghost" title="MCP servers, skills and plugins of this opencode">Tools</button>

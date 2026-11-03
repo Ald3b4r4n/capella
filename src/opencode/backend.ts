@@ -197,6 +197,15 @@ export interface Backend {
   pluginsCheck(): Promise<PluginInfo[]>;
   /** Updates the named package plugins (2.x only). */
   pluginsUpdate(targets: string[]): Promise<void>;
+  /** 2.x only: worktrees are copies of the project's repository that a chat can work in. */
+  readonly canWorktree: boolean;
+  /** The id opencode knows the project by, or undefined when it does not list this folder yet. */
+  projectId(directory: string): Promise<string | undefined>;
+  listWorktrees(projectId: string): Promise<Array<{ directory: string; strategy?: string }>>;
+  /** Creates one and returns its folder. */
+  createWorktree(projectId: string, name: string): Promise<string>;
+  /** Removes one. Without `force` the server refuses when the worktree has changes that are not committed. */
+  removeWorktree(projectId: string, directory: string, force: boolean): Promise<void>;
   interrupt(sessionId: string): Promise<void>;
   reply(sessionId: string, requestId: string, decision: "once" | "always" | "reject", message?: string): Promise<void>;
   pending(): Promise<PendingApproval[]>;

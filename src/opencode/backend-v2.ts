@@ -4,6 +4,7 @@ import { mapForm, mapFrame, mapModels, parseFrame, type MapResult, type ModelInf
 import { mapSessionRows, replayItems, type ReplayItem, type SessionRow } from "./history.ts";
 import { modeById, rulesWith, type Extras, type ModeId, type WebPolicy } from "./modes.ts";
 import { mapUsageLimits, type UsageSnapshot } from "./usage.ts";
+import { samePath } from "./worktrees.ts";
 
 /** opencode 2.x: the `/api/*` routes, as measured on 2.2.5 (docs/PROTOCOL-NOTES.md). */
 export class BackendV2 implements Backend {
@@ -208,6 +209,35 @@ export class BackendV2 implements Backend {
 
   async pluginsUpdate(targets: string[]): Promise<void> {
     await this.client.post("/api/plugin/update", { targets }, { timeoutMs: 180_000 });
+  }
+
+  readonly canWorktree = true;
+
+  async projectId(directory: string): Promise<string | undefined> {
+    const rows = await this.client.get<unknown>("/api/project");
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const { id, canonical } = (row ?? {}) as { id?: unknown; canonical?: unknown };
+      if (typeof id === "string" && typeof canonical === "string" && samePath(canonical, directory)) return id;
+    }
+    return undefined;
+  }
+
+  async listWorktrees(projectId: string): Promise<Array<{ directory: string; strategy?: string }>> {
+    const rows = await this.client.get<unknown>("/api/worktree", { query: { projectID: projectId } });
+    return (Array.isArray(rows) ? rows : []).flatMap((r): Array<{ directory: string; strategy?: string }> => {
+      const { directory, strategy } = (r ?? {}) as { directory?: unknown; strategy?: unknown };
+      return typeof directory === "string" ? [{ directory, strategy: typeof strategy === "string" ? strategy : undefined }] : [];
+    });
+  }
+
+  async createWorktree(projectId: string, name: string): Promise<string> {
+    const made = await this.client.post<{ directory?: unknown }>("/api/worktree", { projectID: projectId, name }, { timeoutMs: 120_000 });
+    if (typeof made?.directory !== "string") throw new Error("opencode did not say where the worktree is");
+    return made.directory;
+  }
+
+  async removeWorktree(projectId: string, directory: string, force: boolean): Promise<void> {
+    await this.client.request("DELETE", "/api/worktree", { body: { projectID: projectId, directory, force }, timeoutMs: 120_000 });
   }
 
   async interrupt(sessionId: string): Promise<void> {

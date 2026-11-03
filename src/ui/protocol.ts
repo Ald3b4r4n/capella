@@ -122,11 +122,21 @@ export interface ToolsView {
   canManagePlugins: boolean;
   /** 1.x cannot forget a server: removing only disconnects it. */
   removeForgets: boolean;
+  worktrees: WorktreesView;
+}
+
+/** The Worktrees section: the project and the separate copies of it (detached, no branch) a chat can work in. */
+export interface WorktreesView {
+  /** 2.x only. */
+  supported: boolean;
+  rows: Array<{ directory: string; name: string; kind: "project" | "worktree"; current: boolean; removable: boolean }>;
+  /** Why the list could not be read (not a git repository, say). */
+  problem?: string;
 }
 
 /** Messages the extension sends to the page. Plain data only: nothing here carries a secret. */
 export type ToWebview =
-  | { type: "init"; version?: string; workspace: string; modes: ModeRow[]; mode: string; models: ModelRow[]; model?: string; features?: { history: boolean } }
+  | { type: "init"; version?: string; workspace: string; /** The name of the worktree this chat works in, when it does. */ worktree?: string; modes: ModeRow[]; mode: string; models: ModelRow[]; model?: string; features?: { history: boolean } }
   | { type: "event"; event: SessionEvent }
   | { type: "user"; text: string; files?: Array<{ name: string; mime: string; thumb?: string }> }
   | { type: "attachments"; items: AttachmentView[] }
@@ -180,6 +190,10 @@ export type FromWebview =
   | { type: "pluginRemove"; target: string }
   | { type: "skillInstall" }
   | { type: "skillRemove"; name: string }
+  | { type: "worktreeNew" }
+  | { type: "worktreeChat"; directory: string }
+  | { type: "worktreeOpen"; directory: string }
+  | { type: "worktreeRemove"; directory: string }
   /** The user's answer to a question of the agent, keyed by the fields of the request. */
   | { type: "answerQuestion"; requestId: string; answers: Record<string, string | number | boolean | string[]> }
   | { type: "rejectQuestion"; requestId: string }

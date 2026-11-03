@@ -43,6 +43,12 @@ writeFileSync(
 writeFileSync(join(workspace, "hello.txt"), "hello from the capella e2e\n");
 writeFileSync(join(workspace, "index.html"), "<!doctype html><title>Capella static preview</title><h1>Static page OK</h1>");
 writeFileSync(join(workspace, "plan.txt"), "alpha\nbeta\ngamma\n");
+if (process.env.E2E_WORKTREES) {
+  const git = (...args) => execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@e2e.test", ...args], { cwd: workspace, stdio: "pipe" });
+  git("init", "-q", "-b", "main");
+  git("add", ".");
+  git("commit", "-q", "-m", "e2e");
+}
 // Dictation without a microphone or an engine: the fake recorder and transcriber (setting capella.dev.voice).
 mkdirSync(join(workspace, ".vscode"), { recursive: true });
 // E2E_V1=<path to an opencode 1.x executable>: a shorter run against that 1.x, in a throwaway opencode home with the user's
@@ -72,16 +78,16 @@ const skillSource = join(work, "skill-src", "e2e-skill");
 mkdirSync(join(skillSource, "scripts"), { recursive: true });
 writeFileSync(join(skillSource, "SKILL.md"), "---\nname: e2e-skill\ndescription: Installed by the Capella e2e.\n---\nSay E2E.\n");
 writeFileSync(join(skillSource, "scripts", "run.py"), "print('e2e')\n");
-const childEnv = { ...process.env, CAPELLA_TRACE_FILE: traceFile, CAPELLA_DEV_ADD_FOLDER: libFolder, CAPELLA_DEV_SKILL_FOLDER: skillSource };
+const childEnv = { ...process.env, CAPELLA_TRACE_FILE: traceFile, CAPELLA_DEV_ADD_FOLDER: libFolder, CAPELLA_DEV_SKILL_FOLDER: skillSource, CAPELLA_DEV_WORKTREE_NAME: "e2e-tree" };
 // E2E_ACCOUNTS connects and signs out a DUMMY key, and E2E_TOOLS adds MCP servers with secrets and starts new chats: they run in a throwaway home (like 1.x), never in your own opencode, whose own MCP servers would also make every start slow.
-if (V1 || process.env.E2E_ACCOUNTS || process.env.E2E_TOOLS || process.env.E2E_BROWSER || process.env.E2E_EXTRAS) {
+if (V1 || process.env.E2E_ACCOUNTS || process.env.E2E_TOOLS || process.env.E2E_BROWSER || process.env.E2E_EXTRAS || process.env.E2E_WORKTREES) {
   const v1Home = join(work, "v1-home");
   Object.assign(childEnv, { HOME: v1Home, USERPROFILE: v1Home, XDG_CONFIG_HOME: join(v1Home, "c"), XDG_DATA_HOME: join(v1Home, "d"), XDG_STATE_HOME: join(v1Home, "s"), XDG_CACHE_HOME: join(v1Home, "k") });
   for (const name of Object.keys(childEnv)) if (/(_API_KEY|_TOKEN|_SECRET)$/i.test(name)) delete childEnv[name];
 }
 
 const startedAt = Date.now();
-if (process.env.E2E_EXTRAS) process.on("exit", () => execFileSync(process.execPath, [join(root, "scripts", "stop-services.mjs"), String(startedAt - 2000)], { stdio: "ignore" }));
+if (process.env.E2E_EXTRAS || process.env.E2E_WORKTREES) process.on("exit", () => execFileSync(process.execPath, [join(root, "scripts", "stop-services.mjs"), String(startedAt - 2000)], { stdio: "ignore" }));
 const child = spawn(
   exe,
   [workspace, `--user-data-dir=${userData}`, `--extensions-dir=${join(work, "extensions")}`, `--extensionDevelopmentPath=${root}`, `--remote-debugging-port=${port}`, "--disable-workspace-trust", "--skip-release-notes", "--skip-welcome", "--new-window"],
@@ -424,7 +430,7 @@ try {
   const toolsChecks = async (heavy = false) => {
     await evalWeb("(() => { d.getElementById('toolsBtn').click(); return true; })()");
     const first = await waitFor("the Tools panel", () => evalWeb("(() => { const t = d.getElementById('tools'); const b = d.getElementById('toolsBody'); return !t.hidden && b.querySelector('.tools-section') ? [...b.querySelectorAll('h3')].map(h => h.textContent) : null; })()"), 20000).catch(() => null);
-    check("the Tools panel lists accounts, MCP servers, skills and plugins", !!first && first.length === 4 && first[0] === "Accounts" && /^MCP servers/.test(first[1]) && /^Skills \(\d+\)/.test(first[2]) && /^Plugins/.test(first[3]), JSON.stringify(first));
+    check("the Tools panel lists accounts, worktrees, MCP servers, skills and plugins", !!first && first.length === 5 && first[0] === "Accounts" && first[1] === "Worktrees" && /^MCP servers/.test(first[2]) && /^Skills \(\d+\)/.test(first[3]) && /^Plugins/.test(first[4]), JSON.stringify(first));
     await shot("33-tools");
     const rowOf = (name) => `[...d.querySelectorAll('#toolsBody .session')].find(r => r.querySelector('.session-title').textContent === ${JSON.stringify(name)})`;
     const addMcp = "(() => { [...d.querySelectorAll('#toolsBody .btn')].find(b => /^Add an MCP server/.test(b.textContent)).click(); return true; })()";
@@ -693,6 +699,63 @@ try {
   };
 
   // Plugins and skills: add, check, remove, install. A throwaway home only: the plugin goes into ITS global configuration.
+  const worktreeChecks = async () => {
+    const open = async () => {
+      await evalWeb("(() => { d.getElementById('toolsBtn').click(); return true; })()");
+      await waitFor("the Tools panel", () => evalWeb("!d.getElementById('tools').hidden && !!d.querySelector('#toolsBody .tools-section')"), 30000);
+      await sleep(1000);
+    };
+    const rows = () => evalWeb(`(() => { const s = [...d.querySelectorAll('#toolsBody .tools-section')].find(x => /^Worktrees/.test(x.querySelector('h3').textContent)); return s ? [...s.querySelectorAll('.session')].map(r => ({ title: r.querySelector('.session-title').textContent, kind: r.dataset.kind, here: !!r.querySelector('.badge.connected'), dir: r.querySelector('.session-meta').textContent, buttons: [...r.querySelectorAll('.btn')].map(b => b.textContent) })) : null; })()`);
+    const press = (title, label) => evalWeb(`(() => { const s = [...d.querySelectorAll('#toolsBody .tools-section')].find(x => /^Worktrees/.test(x.querySelector('h3').textContent)); const r = [...s.querySelectorAll('.session')].find(x => x.querySelector('.session-title').textContent === ${JSON.stringify(title)}); [...r.querySelectorAll('.btn')].find(b => b.textContent === ${JSON.stringify(label)}).click(); return true; })()`);
+    const chip = () => evalWeb("(() => { const c = d.getElementById('treeChip'); return c.hidden ? '' : c.textContent; })()");
+    const projectTitle = `${workspace.split(/[\\\\/]/).pop()} (your project)`;
+
+    await open();
+    let list = await rows();
+    check("the Worktrees section lists the project, and the chat is there", Array.isArray(list) && list.length === 1 && list[0].kind === "project" && list[0].here && list[0].title === projectTitle, JSON.stringify(list));
+    await shot("60-worktrees-empty");
+
+    await evalWeb("(() => { [...d.querySelectorAll('#toolsBody .btn')].find(b => b.textContent === 'New worktree\\u2026').click(); return true; })()");
+    const made = await waitFor("the new worktree in the list", async () => { const r = await rows(); return r && r.some((x) => x.title === "e2e-tree") ? r : null; }, 90000).catch(() => null);
+    check("a new worktree is made and listed, with its folder", !!made && existsSync(join(made.find((x) => x.title === "e2e-tree").dir, "hello.txt")), JSON.stringify(made));
+    const treeDir = made?.find((x) => x.title === "e2e-tree")?.dir ?? "";
+    await shot("61-worktree-made");
+
+    await press("e2e-tree", "Chat here");
+    const inTree = await waitFor("the header says the chat works in the worktree", async () => { const c = await chip(); return c ? c : null; }, 90000).catch(() => "");
+    check("a chat in a worktree says so in the header", inTree === "worktree e2e-tree", inTree);
+    await shot("62-chat-in-worktree");
+    await open();
+    list = await rows();
+    check("the list marks where the chat is: the worktree, no longer the project", !!list && list.find((x) => x.title === "e2e-tree")?.here === true && list.find((x) => x.kind === "project")?.here === false, JSON.stringify(list));
+
+    // Something not committed in it: removal will ask for force.
+    writeFileSync(join(treeDir, "scratch.txt"), "work in progress\n");
+    await press(projectTitle, "Chat here");
+    const back = await waitFor("the header drops the worktree", async () => ((await chip()) === "" ? true : null), 60000).catch(() => false);
+    check("a chat back in the project drops the worktree from the header", back === true);
+
+    await open();
+    await press("e2e-tree", "Remove");
+    const q1 = await waitFor("the removal question", dialogText, 30000).catch(() => null);
+    check("removing a worktree asks first, naming it and its folder", !!q1 && /Remove the worktree "e2e-tree"/.test(q1) && q1.includes(treeDir), String(q1));
+    await shot("63-worktree-remove-question");
+    await clickDialog("Cancel");
+    await sleep(1000);
+    check("Cancel removes nothing", existsSync(join(treeDir, "scratch.txt")));
+
+    await press("e2e-tree", "Remove");
+    await waitFor("the question again", dialogText, 30000);
+    await clickDialog("Remove");
+    const q2 = await waitFor("the second question", dialogText, 60000).catch(() => null);
+    check("a worktree with changes that are not committed asks again, with the reason", !!q2 && /has changes that are not committed/.test(q2), String(q2));
+    await shot("64-worktree-force-question");
+    await clickDialog("Remove anyway");
+    const gone = await waitFor("the list without it", async () => { const r = await rows(); return r && !r.some((x) => x.title === "e2e-tree") ? true : null; }, 60000).catch(() => false);
+    check("the worktree is removed from the list and from the disk", gone === true && !existsSync(treeDir), treeDir);
+    await evalWeb("(() => { d.getElementById('toolsClose').click(); return true; })()");
+  };
+
   const extrasChecks = async () => {
     const configFile = join(work, "v1-home", "c", "opencode", "opencode.json");
     const PKG = "@opencode-ai/plugin";
@@ -776,6 +839,12 @@ try {
     check("the folder Capella installed is deleted", !existsSync(join(workspace, ".opencode", "skills", "e2e-skill")));
     await evalWeb("(() => { d.getElementById('toolsClose').click(); return true; })()");
   };
+
+  if (process.env.E2E_WORKTREES) {
+    await worktreeChecks();
+    console.log(failed === 0 ? `[${label}] ALL CHECKS PASSED (worktrees)` : `[${label}] ${failed} CHECK(S) FAILED (worktrees)`);
+    throw Object.assign(new Error("worktrees run finished"), { v1Done: true });
+  }
 
   if (process.env.E2E_EXTRAS) {
     await extrasChecks();

@@ -16,8 +16,10 @@ import { localPreviewUrl } from "./preview.ts";
 import { extractLocalUrls, isPreviewableUrl, startPreviewServer, type PreviewServer } from "./staticServer.ts";
 import { MODES, DEFAULT_MODE, modeById, type ModeId } from "../opencode/modes.ts";
 import { OpencodeSession, type SessionEvent } from "../opencode/session.ts";
+import { ApiError } from "../opencode/client.ts";
+import { removalFailure, samePath, worktreeNameProblem, type WorktreeRow } from "../opencode/worktrees.ts";
 import { chatHtml } from "./chatHtml.ts";
-import type { AccountView, AttachmentView, FromWebview, McpRowView, ModeRow, ModelRow, QueueItemView, SlashEntryView, ToolsView, ToWebview } from "./protocol.ts";
+import type { AccountView, AttachmentView, FromWebview, McpRowView, ModeRow, ModelRow, QueueItemView, SlashEntryView, ToolsView, ToWebview, WorktreesView } from "./protocol.ts";
 import type { AccountInfo } from "../opencode/backend.ts";
 import { imagePathsIn } from "./browserPreset.ts";
 import { readImagePath } from "./readImage.ts";
@@ -43,6 +45,8 @@ export class ChatPanel {
   private static current: ChatPanel | undefined;
   private readonly panel: vscode.WebviewPanel;
   private readonly output: vscode.OutputChannel;
+  /** The worktree this chat works in; undefined means the project's own folder. */
+  private worktree?: string;
   /** The name of each tool call of the turn, to tell a read from the rest; and the reads whose picture is already shown. */
   private readonly toolNames = new Map<string, string>();
   private readonly readShown = new Set<string>();
@@ -168,7 +172,7 @@ export class ChatPanel {
       this.notice("Open a folder first: opencode works inside a project folder.", true);
       return undefined;
     }
-    const session = new OpencodeSession({ binary, workspaceRoot: folder, mode: this.mode, model: this.model });
+    const session = new OpencodeSession({ binary, workspaceRoot: this.worktree ?? folder, projectRoot: folder, mode: this.mode, model: this.model });
     session.on("event", (event: SessionEvent) => {
       if (event.type === "turn-started") this.busy = true;
       if (event.type === "turn-ended" || event.type === "server-exit") this.busy = false;
@@ -236,7 +240,118 @@ export class ChatPanel {
     const mcp: McpRowView[] = servers.map((s) => ({ name: s.name, status: s.status, detail: s.detail, managed: stored.has(s.name), summary: stored.has(s.name) ? summarize(stored.get(s.name)!) : undefined, integrationId: s.integrationId }));
     const openable = await Promise.all(skills.map(async (s) => !!s.path && isAbsolute(s.path) && (await stat(s.path).then((i) => i.isFile()).catch(() => false))));
     const accounts = (await session.accounts().catch(() => [] as AccountInfo[])).map((a): AccountView => ({ id: a.id, name: a.name, featured: a.id === "opencode" || a.id === "opencode-go", canKey: a.key, oauth: a.oauth.map((o) => ({ id: o.id, label: o.label })), connections: a.connections }));
-    return { accounts, canOauth: session.generation === "v2", mcp, skills: skills.map((s, i) => ({ name: s.name, description: s.description, openable: openable[i]!, managed: this.extras.installedSkills().some((x) => x.name === s.name) })), canManagePlugins: session.generation === "v2", plugins: plugins.map((p) => ({ name: p.name, kind: p.kind, version: p.version, outdated: p.outdated, updating: p.updating, state: p.state, error: p.error, removable: p.kind === "package" })), removeForgets: session.generation === "v2" };
+    return { accounts, canOauth: session.generation === "v2", mcp, skills: skills.map((s, i) => ({ name: s.name, description: s.description, openable: openable[i]!, managed: this.extras.installedSkills().some((x) => x.name === s.name) })), canManagePlugins: session.generation === "v2", plugins: plugins.map((p) => ({ name: p.name, kind: p.kind, version: p.version, outdated: p.outdated, updating: p.updating, state: p.state, error: p.error, removable: p.kind === "package" })), removeForgets: session.generation === "v2", worktrees: await this.worktreesView(session) };
+  }
+
+  private async worktreesView(session: OpencodeSession): Promise<WorktreesView> {
+    if (!session.canWorktree) return { supported: false, rows: [] };
+    try {
+      const rows = await session.worktrees();
+      return { supported: true, rows: rows.map((r) => ({ directory: r.directory, name: r.name, kind: r.kind, removable: r.removable, current: this.worktree ? samePath(r.directory, this.worktree) : r.kind === "project" })) };
+    } catch (error) {
+      return { supported: true, rows: [], problem: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /** A folder the page names is only used when opencode lists it as the project or one of its worktrees. */
+  private async knownWorktree(session: OpencodeSession, directory: unknown): Promise<WorktreeRow | undefined> {
+    if (typeof directory !== "string") return undefined;
+    return (await session.worktrees().catch(() => [] as WorktreeRow[])).find((r) => r.directory === directory);
+  }
+
+  /**
+   * "New worktree": a copy of the project (a separate folder at the current commit, with no branch), made by opencode, where a
+   * chat can work without touching the user's files. (A development host's test can name it through CAPELLA_DEV_WORKTREE_NAME instead of typing into the box.)
+   */
+  private async newWorktree(): Promise<void> {
+    const session = await this.ensureSession();
+    if (!session) return;
+    const dev = this.context.extensionMode === vscode.ExtensionMode.Development ? process.env.CAPELLA_DEV_WORKTREE_NAME : undefined;
+    const name = (dev ?? (await vscode.window.showInputBox({ title: "New worktree", prompt: "A copy of this project (a separate folder, at the current commit) made by opencode, where a chat can work without touching your files. Name:", placeHolder: "try-new-layout", validateInput: worktreeNameProblem })))?.trim();
+    if (!name || worktreeNameProblem(name)) return;
+    try {
+      const directory = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Creating the worktree "${name}"` }, () => session.createWorktree(name));
+      this.notice(`Worktree "${basename(directory)}" is ready. Choose "Chat here" to work in it.`);
+    } catch (error) {
+      this.notice(`Could not create the worktree: ${error instanceof Error ? error.message : String(error)}`, true);
+    }
+    await this.postTools();
+  }
+
+  /** A new chat that works in the project's own folder (`directory` is the project) or in one of its worktrees. */
+  private async chatInWorktree(directory: unknown): Promise<void> {
+    if (this.busy) {
+      this.notice("Wait for the current turn to finish before changing where the chat works.", true);
+      return;
+    }
+    const session = await this.ensureSession();
+    if (!session) return;
+    const row = await this.knownWorktree(session, directory);
+    if (!row) {
+      this.notice("That worktree is not in opencode's list any more.", true);
+      await this.postTools();
+      return;
+    }
+    this.worktree = row.kind === "worktree" ? row.directory : undefined;
+    await this.newChat();
+    this.notice(row.kind === "worktree" ? `A new chat, working in the worktree "${row.name}". Its edits stay in that folder until you commit them there and bring them over.` : "A new chat, working in your project's own folder.");
+  }
+
+  private async openWorktree(directory: unknown): Promise<void> {
+    const session = await this.ensureSession();
+    const row = session ? await this.knownWorktree(session, directory) : undefined;
+    if (!row) {
+      this.notice("That worktree is not in opencode's list any more.", true);
+      return;
+    }
+    await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(row.directory), { forceNewWindow: true });
+  }
+
+  /**
+   * Removing a worktree deletes its folder, so it is asked about, and asked again (with the reason) when it has changes that are
+   * not committed. A chat that works in it moves to the project first, because a running server holds its folder.
+   */
+  private async removeWorktree(directory: unknown): Promise<void> {
+    if (this.busy) {
+      this.notice("Wait for the current turn to finish before removing a worktree.", true);
+      return;
+    }
+    const session = await this.ensureSession();
+    if (!session) return;
+    const row = await this.knownWorktree(session, directory);
+    if (!row || row.kind !== "worktree" || !row.removable) {
+      this.notice("That is not one of this project's worktrees.", true);
+      await this.postTools();
+      return;
+    }
+    const sure = await vscode.window.showWarningMessage(`Remove the worktree "${row.name}"?`, { modal: true, detail: `This deletes the folder ${row.directory}. Anything in it that you have not copied out or put on a branch is lost, commits made there included (a worktree has no branch of its own).` }, "Remove");
+    if (sure !== "Remove") return;
+    if (this.worktree && samePath(this.worktree, row.directory)) {
+      this.worktree = undefined;
+      await this.newChat();
+    }
+    const current = (await this.ensureSession())!;
+    try {
+      await current.removeWorktree(row.directory, false);
+    } catch (error) {
+      const failure = error instanceof ApiError ? removalFailure(error.body) : { message: error instanceof Error ? error.message : String(error), forceRequired: false };
+      if (!failure.forceRequired) {
+        this.notice(`Could not remove the worktree: ${failure.message}`, true);
+        await this.postTools();
+        return;
+      }
+      const force = await vscode.window.showWarningMessage(`"${row.name}" has changes that are not committed.`, { modal: true, detail: "Remove it anyway? Those changes are lost." }, "Remove anyway");
+      if (force !== "Remove anyway") return;
+      try {
+        await current.removeWorktree(row.directory, true);
+      } catch (again) {
+        this.notice(`Could not remove the worktree: ${again instanceof ApiError ? removalFailure(again.body).message : again instanceof Error ? again.message : String(again)}`, true);
+        await this.postTools();
+        return;
+      }
+    }
+    this.notice(`The worktree "${row.name}" was removed.`);
+    await this.postTools();
   }
 
   private async postTools(): Promise<void> {
@@ -253,8 +368,7 @@ export class ChatPanel {
     const path = readImagePath(this.toolNames.get(callId), input);
     if (!path || this.readShown.has(callId)) return;
     this.readShown.add(callId);
-    const roots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
-    const loaded = await loadAnswerImage(path, roots);
+    const loaded = await loadAnswerImage(path, this.roots());
     if (loaded.ok) this.post({ type: "toolImages", callId, images: [loaded.uri] });
   }
 
@@ -265,7 +379,7 @@ export class ChatPanel {
    */
   private async showToolImages(callId: string, text: string): Promise<void> {
     const dir = this.mcp.browserOutDir();
-    const project = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const project = this.worktree ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!project) return;
     const images: string[] = [];
     for (const path of imagePathsIn(text, dir, project)) {
@@ -659,7 +773,7 @@ export class ChatPanel {
   }
 
   private resetChanges(): void {
-    this.changes = new ChangeTracker((vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath));
+    this.changes = new ChangeTracker(this.roots());
     ChatPanel.originals?.clear();
     this.changeQueue = Promise.resolve();
   }
@@ -707,8 +821,10 @@ export class ChatPanel {
     await vscode.commands.executeCommand("vscode.diff", before, file, `${original.rel} (before this chat \u2194 now)`);
   }
 
+  /** The folders this chat may show files from: the open folders, and the worktree it works in. */
   private roots(): string[] {
-    return (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+    const open = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+    return this.worktree ? [...open, this.worktree] : open;
   }
 
   private postAttachments(): void {
@@ -898,7 +1014,7 @@ export class ChatPanel {
   private async sendInit(): Promise<void> {
     const session = await this.ensureSession();
     if (!session) return;
-    this.post({ type: "init", version: session.version, workspace: vscode.workspace.workspaceFolders?.[0]?.name ?? "", modes: this.modeRows(), mode: this.mode, models: this.modelRows(session), model: this.model, features: { history: featureFlags(session.compat).history } });
+    this.post({ type: "init", version: session.version, workspace: vscode.workspace.workspaceFolders?.[0]?.name ?? "", worktree: this.worktree ? basename(this.worktree) : undefined, modes: this.modeRows(), mode: this.mode, models: this.modelRows(session), model: this.model, features: { history: featureFlags(session.compat).history } });
     this.post({ type: "usage", usage: this.tracker.view() });
     this.postModelNote(session);
     this.postQueue();
@@ -912,8 +1028,7 @@ export class ChatPanel {
           await this.sendInit();
           break;
         case "loadImage": {
-          const roots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
-          const result = await loadAnswerImage(message.src, roots);
+          const result = await loadAnswerImage(message.src, this.roots());
           this.post(result.ok ? { type: "image", src: message.src, uri: result.uri } : { type: "image", src: message.src, error: result.reason });
           break;
         }
@@ -1019,6 +1134,18 @@ export class ChatPanel {
           }
           break;
         }
+        case "worktreeNew":
+          await this.newWorktree();
+          break;
+        case "worktreeChat":
+          await this.chatInWorktree(message.directory);
+          break;
+        case "worktreeOpen":
+          await this.openWorktree(message.directory);
+          break;
+        case "worktreeRemove":
+          await this.removeWorktree(message.directory);
+          break;
         case "skillRemove":
           if (await this.extras.removeSkill(message.name)) {
             for (const wait of [1000, 6000]) setTimeout(() => void this.postTools(), wait);

@@ -6,6 +6,7 @@
     "DELETE /api/integration/{integrationID}/connect/oauth/{attemptID}",
     "DELETE /api/session/{sessionID}/form/{formID}",
     "DELETE /api/session/{sessionID}/inbox/{inboxID}",
+    "DELETE /api/worktree",
     "GET /api/command",
     "GET /api/credential",
     "GET /api/event",
@@ -18,12 +19,14 @@
     "GET /api/model/default",
     "GET /api/permission/request",
     "GET /api/plugin",
+    "GET /api/project",
     "GET /api/session",
     "GET /api/session/{sessionID}",
     "GET /api/session/{sessionID}/form",
     "GET /api/session/{sessionID}/inbox",
     "GET /api/session/{sessionID}/message",
     "GET /api/skill",
+    "GET /api/worktree",
     "PATCH /api/session/{sessionID}",
     "PATCH /api/session/{sessionID}/inbox/{inboxID}",
     "POST /api/credential/{credentialID}/activate",
@@ -44,7 +47,8 @@
     "POST /api/session/{sessionID}/model",
     "POST /api/session/{sessionID}/permission/{requestID}/reply",
     "POST /api/session/{sessionID}/prompt",
+    "POST /api/worktree",
     "PUT /api/experimental/mcp/{server}"
   ],
-  "fingerprint": "c9bb135d1bd8"
+  "fingerprint": "17a46deb9554"
 }

@@ -272,6 +272,24 @@ export class BackendV1 implements Backend {
     });
   }
 
+  readonly canWorktree = false;
+
+  projectId(): Promise<string | undefined> {
+    return Promise.reject(new Error("Worktrees need opencode 2.x."));
+  }
+
+  listWorktrees(): Promise<Array<{ directory: string; strategy?: string }>> {
+    return Promise.reject(new Error("Worktrees need opencode 2.x."));
+  }
+
+  createWorktree(): Promise<string> {
+    return Promise.reject(new Error("Worktrees need opencode 2.x."));
+  }
+
+  removeWorktree(): Promise<void> {
+    return Promise.reject(new Error("Worktrees need opencode 2.x."));
+  }
+
   async usage(): Promise<UsageSnapshot | undefined> {
     return undefined;
   }

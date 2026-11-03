@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import type { AccountInfo, Backend, McpConfig, McpServerInfo, ModelRef, OauthAttempt, OauthStatus, PluginInfo, PromptFile, PromptOptions, SkillInfo, SlashEntry } from "./backend.ts";
 import { BackendV1 } from "./backend-v1.ts";
@@ -11,11 +13,14 @@ import { OpencodeServer, type OpencodeServerOptions } from "./server.ts";
 import testedV1 from "./tested.v1.json" with { type: "json" };
 import testedV2 from "./tested.json" with { type: "json" };
 import type { UsageSnapshot } from "./usage.ts";
+import { mapWorktrees, projectIdFromRoots, validWorktreeName, type WorktreeRow } from "./worktrees.ts";
 
 export type ApprovalDecision = "once" | "always" | "reject";
 
 export interface OpencodeSessionOptions extends OpencodeServerOptions {
   workspaceRoot: string;
+  /** The user's own folder, when `workspaceRoot` is one of its worktrees (worktrees are listed and made from the project). */
+  projectRoot?: string;
   mode?: ModeId;
   /** `providerID/modelID`. When absent, the user's own default model is resolved and selected explicitly. */
   model?: string;
@@ -120,6 +125,23 @@ export class OpencodeSession extends EventEmitter {
 
   get id(): string | undefined {
     return this.sessionId;
+  }
+
+  /**
+   * The user's own folder: the one worktrees belong to. In its real form (links and Windows short names resolved), which is
+   * how opencode names it, so that the project is not taken for one of its own worktrees.
+   */
+  get projectRoot(): string {
+    const given = this.options.projectRoot ?? this.options.workspaceRoot;
+    try {
+      return realpathSync.native(given);
+    } catch {
+      return given;
+    }
+  }
+
+  get canWorktree(): boolean {
+    return this.backend?.canWorktree ?? false;
   }
 
   /** Starts the server, reads the version and the model catalog and opens the event stream. No model call. */
@@ -269,6 +291,47 @@ export class OpencodeSession extends EventEmitter {
     // Read fresh each time: a server may have been added or removed since the rules were last written.
     this.mcpNames = (await backend.mcpList().catch(() => undefined))?.map((s) => s.name) ?? this.mcpNames;
     return { folders: this.extraFolders, mcp: this.mcpNames };
+  }
+
+  private worktreeProject?: string;
+
+  /** The id opencode knows the project by: from its list of projects, else (a git folder it has not met yet) its first commit. */
+  private async projectId(backend: Backend): Promise<string> {
+    if (this.worktreeProject) return this.worktreeProject;
+    const known = await backend.projectId(this.projectRoot);
+    const id = known ?? (await new Promise<string | undefined>((resolve) => execFile("git", ["rev-list", "--max-parents=0", "HEAD"], { cwd: this.projectRoot, timeout: 15000, windowsHide: true }, (error, stdout) => resolve(error ? undefined : projectIdFromRoots(stdout)))));
+    if (!id) throw new Error("opencode does not know this folder yet (it must be a git repository with a commit). Send a first message in it, then try again.");
+    this.worktreeProject = id;
+    return id;
+  }
+
+  /** The project and the worktrees opencode made from it. */
+  async worktrees(): Promise<WorktreeRow[]> {
+    await this.start();
+    const backend = this.requireBackend();
+    if (!backend.canWorktree) throw new Error("Worktrees need opencode 2.x.");
+    return mapWorktrees(await backend.listWorktrees(await this.projectId(backend)), this.projectRoot);
+  }
+
+  /** Makes a worktree and returns its folder. The name becomes a folder and a branch name, so only plain names are taken. */
+  async createWorktree(name: string): Promise<string> {
+    await this.start();
+    if (!validWorktreeName(name)) throw new Error("That is not a name a worktree can have.");
+    const backend = this.requireBackend();
+    if (!backend.canWorktree) throw new Error("Worktrees need opencode 2.x.");
+    return backend.createWorktree(await this.projectId(backend), name);
+  }
+
+  /**
+   * Removes a worktree. Only a folder that opencode lists as one of this project's worktrees can be removed: never the project
+   * itself, and never a path the page or a model made up.
+   */
+  async removeWorktree(directory: string, force: boolean): Promise<void> {
+    const rows = await this.worktrees();
+    const row = rows.find((r) => r.directory === directory);
+    if (!row || row.kind !== "worktree" || !row.removable) throw new Error("That folder is not one of this project's worktrees.");
+    const backend = this.requireBackend();
+    await backend.removeWorktree(await this.projectId(backend), row.directory, force);
   }
 
   async mcpList(): Promise<McpServerInfo[]> {

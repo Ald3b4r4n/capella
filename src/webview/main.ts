@@ -1140,10 +1140,55 @@ function paintAccounts(tools: ToolsView, into: HTMLElement): void {
   rows();
 }
 
+function paintWorktrees(view: ToolsView["worktrees"]): void {
+  const box = toolsSection("Worktrees", "A worktree is a separate copy of this project (its files at the current commit, no branch of its own) that opencode makes. A chat that works in one edits that copy and leaves your files alone. To keep what it did, open the folder, commit there and put it on a branch with your usual git tools.");
+  if (!view.supported) {
+    box.append(el("div", "faint pad", "Worktrees need opencode 2.x."));
+    return;
+  }
+  if (view.problem) box.append(el("div", "session-meta error-text pad", view.problem));
+  for (const row of view.rows) {
+    const item = el("div", "session");
+    item.dataset.kind = row.kind;
+    const text = el("div", "session-text");
+    text.append(el("div", "session-title", row.kind === "project" ? `${row.name} (your project)` : row.name), el("div", "session-meta faint", row.directory));
+    const actions = el("div", "session-actions");
+    if (row.current) actions.append(el("span", "badge connected", "chat is here"));
+    else {
+      const here = el("button", "btn", "Chat here");
+      here.type = "button";
+      here.title = row.kind === "project" ? "Start a new chat that works in your project's own folder" : "Start a new chat that works in this copy";
+      here.addEventListener("click", () => post({ type: "worktreeChat", directory: row.directory }));
+      actions.append(here);
+    }
+    if (row.kind === "worktree") {
+      const open = el("button", "btn", "Open");
+      open.type = "button";
+      open.title = "Open this folder in a new editor window";
+      open.addEventListener("click", () => post({ type: "worktreeOpen", directory: row.directory }));
+      actions.append(open);
+      if (row.removable) {
+        const remove = el("button", "btn", "Remove");
+        remove.type = "button";
+        remove.title = "Delete this worktree's folder (asked about first)";
+        remove.addEventListener("click", () => post({ type: "worktreeRemove", directory: row.directory }));
+        actions.append(remove);
+      }
+    }
+    item.append(text, actions);
+    box.append(item);
+  }
+  const add = el("button", "btn", "New worktree\u2026");
+  add.type = "button";
+  add.addEventListener("click", () => post({ type: "worktreeNew" }));
+  box.append(add);
+}
+
 function paintTools(tools: ToolsView): void {
   toolsBody.replaceChildren();
   const accounts = toolsSection("Accounts", tools.canOauth ? "Zen and Go, and every other provider opencode knows. A key is stored by opencode, not by Capella." : "Zen and Go, and every other provider opencode knows. A key is stored by opencode, not by Capella. Browser sign-ins need opencode 2.x (use \`opencode auth login\` here).");
   paintAccounts(tools, accounts);
+  paintWorktrees(tools.worktrees);
   const mcp = toolsSection("MCP servers", "Their tools are asked about before they run, except in Bypass mode.");
   for (const server of tools.mcp) {
     const row = el("div", "session");
@@ -1570,6 +1615,11 @@ window.addEventListener("message", (e: MessageEvent<ToWebview>) => {
       model = message.model;
       $<HTMLElement>("historyBtn").hidden = message.features?.history === false;
       $<HTMLElement>("version").textContent = message.version ? `opencode ${message.version}` : "";
+      {
+        const chip = $<HTMLElement>("treeChip");
+        chip.hidden = !message.worktree;
+        chip.textContent = message.worktree ? `worktree ${message.worktree}` : "";
+      }
       paintChips();
       break;
     case "event":

@@ -39,6 +39,8 @@ let pendingForm;
 let formResolve;
 let mcp = [{ name: "docs", status: { status: "connected" } }];
 let pluginsChecked = false;
+// Worktrees: the project is the folder the server runs in; a worktree whose name has "dirty" in it refuses removal without force.
+const worktrees = [];
 // Providers and their stored credentials. `GET /api/credential` carries the secrets themselves, like the real one.
 let credentials = [{ id: "cred_zen1", integrationID: "opencode", label: "Default", active: true, method: "oauth", value: { type: "oauth", access: "SECRET-ACCESS", refresh: "SECRET-REFRESH" } }];
 let oauthPolls = 0;
@@ -178,7 +180,7 @@ const server = createServer(async (req, res) => {
     req.on("close", () => listeners.delete(res));
     return;
   }
-  const body = ["POST", "PATCH", "PUT"].includes(req.method) ? await readBody(req) : {};
+  const body = ["POST", "PATCH", "PUT", "DELETE"].includes(req.method) ? await readBody(req) : {};
   record(body);
   // Stored sessions: a list, one old session with a model and a short conversation, and forking.
   if (req.method === "GET" && path === "/api/session")
@@ -278,6 +280,25 @@ const server = createServer(async (req, res) => {
     if (!target) return json(res, 404, { message: "no such credential" });
     for (const c of credentials) if (c.integrationID === target.integrationID) c.active = c.id === target.id;
     return json(res, 200);
+  }
+  if (req.method === "GET" && path === "/api/project") return json(res, 200, [{ id: "a".repeat(40), canonical: process.cwd(), vcs: "git", time: { created: 1, updated: 1 }, sandboxes: [] }]);
+  if (path === "/api/worktree") {
+    if (url.searchParams.get("projectID") !== "a".repeat(40) && body.projectID !== "a".repeat(40)) return json(res, 400, { _tag: "InvalidRequestError", message: "Missing key\n  at [\"projectID\"]" });
+    if (req.method === "GET") return json(res, 200, [{ directory: process.cwd() }, ...worktrees.map((directory) => ({ directory, strategy: "git" }))]);
+    if (req.method === "POST") {
+      const directory = process.cwd() + "-worktrees/" + body.name;
+      worktrees.push(directory);
+      record(body);
+      return json(res, 200, { directory });
+    }
+    if (req.method === "DELETE") {
+      record(body);
+      if (!worktrees.includes(body.directory)) return json(res, 400, { _tag: "WorktreeError", name: "WorktreeError", data: { message: "not a worktree", forceRequired: false } });
+      if (body.directory.includes("dirty") && !body.force) return json(res, 400, { _tag: "WorktreeError", name: "WorktreeError", data: { message: "has uncommitted changes", forceRequired: true } });
+      worktrees.splice(worktrees.indexOf(body.directory), 1);
+      res.writeHead(204);
+      return res.end();
+    }
   }
   if (req.method === "GET" && path === "/api/plugin") return json(res, 200, { location: { directory: "x" }, data: [{ id: "opencode.core", source: { type: "builtin" }, features: {}, state: { status: "active" } }, { id: "my-plugin", source: { type: "package", target: "my-plugin", version: "1.0.0", ...(pluginsChecked ? { outdated: true } : {}) }, features: {}, state: { status: "active" } }, { id: "broken-plugin", source: { type: "package", target: "broken-plugin" }, features: {}, state: { status: "failed", error: "Plugin must export a default definition" } }] });
   if (req.method === "POST" && path === "/api/plugin/check") {

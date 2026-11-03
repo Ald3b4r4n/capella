@@ -4,11 +4,14 @@ import type { ServerEndpoint } from "./server.ts";
 export class ApiError extends Error {
   readonly status: number;
   readonly path: string;
+  /** The answer's text, up to 2000 characters (the message carries only the first 300). */
+  readonly body: string;
   constructor(method: string, path: string, status: number, body: string) {
     super(`${method} ${path}: HTTP ${status}${body ? ` ${body.slice(0, 300)}` : ""}`);
     this.name = "ApiError";
     this.status = status;
     this.path = path;
+    this.body = body.slice(0, 2000);
   }
 }
 
