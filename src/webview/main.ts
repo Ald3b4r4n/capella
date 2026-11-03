@@ -1613,7 +1613,7 @@ window.addEventListener("message", (e: MessageEvent<ToWebview>) => {
       for (const uri of message.images) {
         const img = el("img", "answer-pic");
         img.src = uri;
-        img.alt = "Screenshot taken by the agent";
+        img.alt = "A picture the tool read or took";
         strip.append(img);
       }
       step.append(strip);

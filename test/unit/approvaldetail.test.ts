@@ -46,3 +46,12 @@ test("anything else shows its arguments as name: value, long texts shortened, an
   assert.equal(describeApproval("shell", "bash", "text"), undefined);
   assert.equal(describeApproval("shell", "bash", {}), undefined);
 });
+
+test("only a read of a picture file asks to be looked at", async () => {
+  const { readImagePath } = await import("../../src/ui/readImage.ts");
+  assert.equal(readImagePath("read", { path: "assets/logo.PNG" }), "assets/logo.PNG");
+  assert.equal(readImagePath("read", { filePath: "C:\proj\a.jpeg" }), "C:\proj\a.jpeg");
+  assert.equal(readImagePath("Read", { file_path: "x.webp" }), "x.webp");
+  assert.equal(readImagePath("read_file", { file: "x.gif" }), "x.gif");
+  for (const [tool, input] of [["read", { path: "notes.txt" }], ["write", { path: "a.png" }], ["bash", { command: "cat a.png" }], ["read", {}], ["read", null], [undefined, { path: "a.png" }], ["read", { path: "a.png.txt" }], ["read", { path: "x".repeat(1100) + ".png" }]] as const) assert.equal(readImagePath(tool, input), undefined, `${tool} ${JSON.stringify(input)?.slice(0, 40)}`);
+});

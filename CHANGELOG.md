@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.13 (2026-11-02)
+
+- **A picture the agent reads is shown under its read card.** When the `read` tool is used on a PNG, JPEG, GIF or WebP, the card now carries a miniature of the picture. The file goes through the same checks as any picture in an answer: inside the open folder, a picture by its bytes, up to 5 MB. Chats opened from the history do not replay the miniatures.
+- Checked with a real model reading a real picture in both editors.
+
 ## 0.1.12 (2026-11-02)
 
 - **Approval cards say what they are about.** The card for an MCP tool (the browser, say) showed only "Allow browser_browser_navigate?" and a `*`. It now links the request to its tool call and shows, in words, `Calls the "browser_navigate" tool of the "browser" server` with the call and its arguments (`browser.browser_navigate({ url: "http://127.0.0.1:5173/" })`), and the code on demand; commands, edits and web fetches are stated plainly; other calls show `name: value` lines. The bare `*` is no longer repeated.

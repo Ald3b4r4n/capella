@@ -20,6 +20,7 @@ import { chatHtml } from "./chatHtml.ts";
 import type { AccountView, AttachmentView, FromWebview, McpRowView, ModeRow, ModelRow, QueueItemView, SlashEntryView, ToolsView, ToWebview } from "./protocol.ts";
 import type { AccountInfo } from "../opencode/backend.ts";
 import { imagePathsIn } from "./browserPreset.ts";
+import { readImagePath } from "./readImage.ts";
 import { sanitizeAnswers } from "./questions.ts";
 import { validMcpName } from "./mcpInput.ts";
 import { McpManager } from "./mcpManager.ts";
@@ -42,6 +43,9 @@ export class ChatPanel {
   private static current: ChatPanel | undefined;
   private readonly panel: vscode.WebviewPanel;
   private readonly output: vscode.OutputChannel;
+  /** The name of each tool call of the turn, to tell a read from the rest; and the reads whose picture is already shown. */
+  private readonly toolNames = new Map<string, string>();
+  private readonly readShown = new Set<string>();
   private readonly mcp: McpManager;
   private readonly extras: ExtrasManager;
   private readonly tracker: UsageTracker;
@@ -175,6 +179,12 @@ export class ChatPanel {
       }
       if (event.type === "turn-ended") void this.reconcileQueue(session);
       if (event.type === "tool-result") void this.showToolImages(event.callId, event.text);
+      if (event.type === "tool-started") this.toolNames.set(event.callId, event.name);
+      if (event.type === "tool-called" || event.type === "tool-input") void this.showReadImage(event.callId, event.input);
+      if (event.type === "turn-ended") {
+        this.toolNames.clear();
+        this.readShown.clear();
+      }
       this.post({ type: "event", event });
       this.countFreeUsage(event, session);
       if (event.type !== "resync" && event.type !== "server-exit") this.trackChanges(event);
@@ -232,6 +242,20 @@ export class ChatPanel {
   private async postTools(): Promise<void> {
     const session = await this.ensureSession();
     if (session) this.post({ type: "tools", tools: await this.toolsView(session) });
+  }
+
+  /**
+   * A picture the agent reads (the `read` tool on a PNG, JPEG, GIF or WebP) is shown under the tool's card, so that the user
+   * sees what the agent is looking at. The file is checked as any picture of an answer is: inside the open folder, really a
+   * picture by its bytes, up to 5 MB; anything else shows nothing.
+   */
+  private async showReadImage(callId: string, input: unknown): Promise<void> {
+    const path = readImagePath(this.toolNames.get(callId), input);
+    if (!path || this.readShown.has(callId)) return;
+    this.readShown.add(callId);
+    const roots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+    const loaded = await loadAnswerImage(path, roots);
+    if (loaded.ok) this.post({ type: "toolImages", callId, images: [loaded.uri] });
   }
 
   /**

@@ -364,7 +364,7 @@ try {
     const answer = "Here it is: ![the chart](chart.png) and ![elsewhere](../outside.png) and ![web](https://example.com/p.png)";
     await post({ type: "text", sessionId: "s", messageId: "m_inj", ordinal: 0, delta: answer });
     await post({ type: "text-end", sessionId: "s", messageId: "m_inj", ordinal: 0, text: answer });
-    const pics = await waitFor("the picture", () => evalWeb("(() => { const i = d.querySelector('img.answer-pic'); return i && i.naturalWidth > 0 ? { src: i.src.slice(0, 22), alt: i.alt, failed: [...d.querySelectorAll('.answer-img.failed')].map(x => x.textContent), web: !!d.querySelector('.md img[src^=http]') } : null; })()"), 15000).catch(() => null);
+    const pics = await waitFor("the picture", () => evalWeb("(() => { const i = d.querySelector('.md img.answer-pic'); return i && i.naturalWidth > 0 ? { src: i.src.slice(0, 22), alt: i.alt, failed: [...d.querySelectorAll('.answer-img.failed')].map(x => x.textContent), web: !!d.querySelector('.md img[src^=http]') } : null; })()"), 15000).catch(() => null);
     console.log("answer pictures:", JSON.stringify(pics));
     check("a picture from the open folder is shown in the answer", !!pics && pics.src.startsWith("data:image/png;base64") && pics.alt === "the chart", JSON.stringify(pics));
     check("a picture outside the folder is refused, and a web picture is never loaded", !!pics && pics.failed.length === 1 && /picture not shown/.test(pics.failed[0]) && pics.web === false, JSON.stringify(pics));
@@ -1069,6 +1069,17 @@ try {
     }
     check("the model saw the attached image (it names the colour red)", /red/i.test(seen), seen);
     await shot("19-attachments-answer");
+  }
+
+  // The agent reads a picture file of the project: the card shows the picture it is looking at.
+  if (!V1) {
+    writeFileSync(join(workspace, "look.png"), Buffer.from(RED_PNG, "base64"));
+    await evalWeb("(() => { const i = d.getElementById('input'); i.value = 'Use your read tool on the file look.png and tell me in one word what colour it is.'; i.dispatchEvent(new Event('input')); d.getElementById('send').click(); return true; })()");
+    await waitFor("the read to end", () => evalWeb("!d.getElementById('stop').offsetParent && !d.querySelector('.turn.live') && !!d.querySelector('.step.tool[data-tool=read]')"), 180000);
+    const thumb = await waitFor("the picture under the read card", () => evalWeb("(() => { const s = [...d.querySelectorAll('.step.tool[data-tool=read]')].pop(); const im = s && s.querySelector('.tool-images img'); return im && im.naturalWidth > 0 ? { arg: s.querySelector('.arg').textContent, w: im.naturalWidth } : null; })()"), 20000).catch(() => null);
+    console.log("read card picture:", JSON.stringify(thumb));
+    check("a picture the agent reads is shown under its read card", !!thumb && /look\.png/.test(thumb.arg), JSON.stringify(thumb));
+    await shot("51-read-picture");
   }
 
   // The agent asks the user a question (its question tool): the card shows the choices, the answer goes back, and the
