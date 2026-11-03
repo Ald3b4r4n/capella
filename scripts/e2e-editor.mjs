@@ -649,6 +649,7 @@ try {
       await sleep(800);
       const ask = (text) => evalWeb(`(() => { const i = d.getElementById('input'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new Event('input')); d.getElementById('send').click(); return true; })()`);
       // Allow what the browser server asks (and reject anything else): the page is the test's own.
+      const details = [];
       const answerApprovals = async (limitMs) => {
         const end = Date.now() + limitMs;
         const asked = [];
@@ -657,6 +658,7 @@ try {
           if (card) {
             const ok = /browser_/.test(card);
             asked.push(card);
+            if (ok) details.push(await evalWeb("(() => { const c = [...d.querySelectorAll('.approval-card:not(.resolved)')].find(x => ![...x.querySelectorAll('button')].some(b => b.disabled)); const ad = c && c.querySelector('.ad'); return ad && !ad.hidden ? ad.innerText : ''; })()"));
             await evalWeb(`(() => { const c = [...d.querySelectorAll('.approval-card:not(.resolved)')].find(x => ![...x.querySelectorAll('button')].some(b => b.disabled)); [...c.querySelectorAll('button')].find(b => b.textContent === ${JSON.stringify(ok ? "Allow once" : "Reject")}).click(); return true; })()`);
           }
           if (await evalWeb("!d.getElementById('stop').offsetParent && !d.querySelector('.turn.live')")) return asked;
@@ -668,7 +670,9 @@ try {
       await sleep(3000);
       const asked = await answerApprovals(240000);
       console.log("approvals asked:", JSON.stringify(asked));
-      check("every browser action asked first", asked.length >= 3 && asked.every((a) => /browser_/.test(a)), JSON.stringify(asked));
+      console.log("approval details:", JSON.stringify(details.slice(0, 4)));
+      check("each browser approval says which tool of which server it calls and with what (not a bare star)", details.length >= 3 && details.some((d) => /Calls the "browser_navigate" tool of the "browser" server/.test(d) && d.includes(url)) && details.every((d) => /Calls the ".+" tool of the "browser" server/.test(d)), JSON.stringify(details.slice(0, 3)));
+      check("every browser action asked first", asked.filter((a) => /browser_/.test(a)).length >= 3, JSON.stringify(asked));
       const answer = await evalWeb("[...[...d.querySelectorAll('.turn')].pop().querySelectorAll('.md')].map(x => x.textContent).join(' ')");
       console.log("browser answer:", JSON.stringify(answer));
       check("the agent opened the page, clicked, and read the new heading", /Clicked by the agent/i.test(answer), answer);
@@ -875,6 +879,8 @@ try {
   const card = await waitFor("the real approval card", () => evalWeb("(() => { const c = d.querySelector('.approval-card'); return c ? { what: c.querySelector('.what').textContent, res: c.querySelector('.res').textContent, buttons: [...c.querySelectorAll('button')].map(b => b.textContent) } : null; })()"), 120000);
   console.log("approval:", JSON.stringify(card));
   check("a real approval card appears for the shell command, with Allow once / Always allow / Reject", /shell/.test(card.what) && /echo hello-from-capella/.test(card.res) && card.buttons.includes("Reject") && card.buttons.includes("Allow once"), JSON.stringify(card));
+  const shellDetail = await evalWeb("(() => { const ad = document.querySelector('.approval-card .ad'); return ad && !ad.hidden ? ad.innerText : ''; })()") || await evalWeb("(() => { const ad = d.querySelector('.approval-card .ad'); return ad && !ad.hidden ? ad.innerText : ''; })()");
+  check("the shell approval says what it runs in words", /Runs this command/.test(shellDetail) && /echo hello-from-capella/.test(shellDetail), shellDetail);
   await shot("07-approval");
   await evalWeb("(() => { [...d.querySelectorAll('.approval-card button')].find(b => b.textContent === 'Reject').click(); return true; })()");
   await waitFor("the turn to end", () => evalWeb("(() => !d.getElementById('stop').offsetParent && !!d.querySelector('.approval-card.resolved'))()"), 120000);

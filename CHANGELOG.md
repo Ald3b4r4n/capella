@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.12 (unreleased)
+
+- **Approval cards say what they are about.** The card for an MCP tool (the browser, say) showed only "Allow browser_browser_navigate?" and a `*`. It now links the request to its tool call and shows, in words, `Calls the "browser_navigate" tool of the "browser" server` with the call and its arguments (`browser.browser_navigate({ url: "http://127.0.0.1:5173/" })`), and the code on demand; commands, edits and web fetches are stated plainly; other calls show `name: value` lines. The bare `*` is no longer repeated.
+- Checked against a real model driving the real browser server in both editors (every approval named its tool and, for the first, the address), and on the shell approval of the main flow.
+
 ## 0.1.11 (2026-11-02)
 
 - **Plugins:** the list now shows what opencode really says (the npm package and its version, why one failed to load, "update available"). **Check for updates**, **Update** (after a question), **Add a plugin…** and **Remove** (the official `opencode plugin add|remove`, after a question that says it is third-party code and that it changes the global configuration). npm package names only. 2.x only; 1.x lists them.

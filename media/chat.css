@@ -258,3 +258,12 @@ textarea::placeholder { color: color-mix(in srgb, var(--fg) 58%, var(--bg)); opa
 .question-card input[type="text"], .question-card input[type="number"], .question-card textarea { width: 100%; margin-top: 4px; background: var(--surface); color: inherit; border: 1px solid var(--edge); border-radius: 8px; padding: 5px 10px; font: inherit; }
 .question-card input:focus, .question-card textarea:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-soft); }
 .question-card button:disabled, .question-card input:disabled, .question-card textarea:disabled { opacity: 0.6; cursor: default; }
+
+/* ---- what an approval is about ---- */
+.approval-card .ad { margin: 4px 0 6px; padding: 6px 8px; border-left: 3px solid var(--gold); background: color-mix(in srgb, var(--gold) 9%, transparent); border-radius: 0 6px 6px 0; }
+.approval-card .ad[hidden] { display: none; }
+.approval-card .ad-head { font-weight: 600; margin-bottom: 2px; }
+.approval-card .ad-line { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.approval-card .ad-code { margin-top: 4px; }
+.approval-card .ad-code summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.approval-card .ad-code pre { margin: 4px 0 0; max-height: 220px; overflow: auto; font-size: 11px; white-space: pre-wrap; word-break: break-word; }

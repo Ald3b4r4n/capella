@@ -5,6 +5,7 @@ import { findLocalUrl } from "../ui/preview.ts";
 import { renderMarkdown } from "./markdown.ts";
 import type { QuestionField, QuestionRequest, QuestionValue } from "../opencode/events.ts";
 import { visible } from "../ui/questions.ts";
+import { describeApproval } from "./approvalDetail.ts";
 
 declare function acquireVsCodeApi(): { postMessage(message: FromWebview): void };
 const vscode = acquireVsCodeApi();
@@ -50,6 +51,29 @@ let turn: HTMLElement | undefined;
 const blocks = new Map<string, { el: HTMLElement; raw: string; kind: "text" | "reasoning" }>();
 const tools = new Map<string, HTMLElement>();
 const approvals = new Map<string, HTMLElement>();
+/** The tool calls seen so far (name, then input), so that an approval can say what its call would do. */
+const callInfo = new Map<string, { name: string; input?: unknown }>();
+/** The detail box of each approval card still waiting, by the call it belongs to: filled when the call's input is known. */
+const approvalDetails = new Map<string, { box: HTMLElement; res: HTMLElement; action: string }>();
+
+function fillApprovalDetail(callId: string): void {
+  const waiting = approvalDetails.get(callId);
+  const call = callInfo.get(callId);
+  if (!waiting || !call) return;
+  const detail = describeApproval(waiting.action, call.name, call.input);
+  if (!detail) return;
+  waiting.box.replaceChildren();
+  if (detail.headline) waiting.box.append(el("div", "ad-head", detail.headline));
+  for (const line of detail.lines) waiting.box.append(el("div", "ad-line", line));
+  if (detail.code) {
+    const more = el("details", "ad-code");
+    more.append(el("summary", undefined, "Show the whole code"), el("pre", undefined, detail.code));
+    waiting.box.append(more);
+  }
+  waiting.box.hidden = false;
+  // opencode often sends only `*` as the resource: the lines above say more, so the bare star is not repeated
+  if (waiting.res.textContent?.trim() === "*") waiting.res.hidden = true;
+}
 let tokens = { input: 0, output: 0 };
 let renderQueued = new Set<string>();
 
@@ -307,9 +331,16 @@ function approvalCard(event: Extract<SessionEvent, { type: "approval-requested" 
   const step = addStep("approval");
   const card = el("div", "approval-card");
   card.append(el("div", "what", event.action === "external_directory" ? "Let the agent use a folder outside the project?" : `Allow ${event.action}?`));
+  const detailBox = el("div", "ad");
+  detailBox.hidden = true;
+  card.append(detailBox);
   const res = el("div", "res");
   res.textContent = event.resources.join("\n") || "(no details)";
   card.append(res);
+  if (event.source) {
+    approvalDetails.set(event.source.callId, { box: detailBox, res, action: event.action });
+    fillApprovalDetail(event.source.callId);
+  }
   if (event.saves.length > 0) card.append(el("div", "hint", `"Always allow" remembers: ${event.saves.join(", ")}`));
   const btns = el("div", "btns");
   const make = (label: string, cls: string, decision: "once" | "always" | "reject") => {
@@ -530,13 +561,18 @@ function onEvent(event: SessionEvent): void {
         break;
       }
       case "tool-started":
+        callInfo.set(event.callId, { name: event.name });
         if (/todo/i.test(event.name)) todoCalls.add(event.callId);
         toolStep(event.callId, event.name);
         break;
       case "tool-input":
+        callInfo.set(event.callId, { name: callInfo.get(event.callId)?.name ?? "tool", input: event.input });
+        fillApprovalDetail(event.callId);
         if (todoCalls.has(event.callId)) paintTodos(event.input);
         break;
       case "tool-called": {
+        callInfo.set(event.callId, { name: callInfo.get(event.callId)?.name ?? "tool", input: event.input });
+        fillApprovalDetail(event.callId);
         if (todoCalls.has(event.callId)) paintTodos(event.input);
         const step = toolStep(event.callId);
         const arg = step.querySelector(".arg");
@@ -597,6 +633,8 @@ function onEvent(event: SessionEvent): void {
         turn = undefined;
         blocks.clear();
         tools.clear();
+        callInfo.clear();
+        approvalDetails.clear();
         break;
       }
       case "resync":
@@ -1659,6 +1697,8 @@ window.addEventListener("message", (e: MessageEvent<ToWebview>) => {
       blocks.clear();
       tools.clear();
       approvals.clear();
+      callInfo.clear();
+      approvalDetails.clear();
       questionCards.clear();
       turn = undefined;
       setBusy(false);
